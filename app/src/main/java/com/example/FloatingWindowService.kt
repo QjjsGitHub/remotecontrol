@@ -51,38 +51,62 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
 
+/**
+ * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
+ * 该服务允许在不处于前台 activity 的情况下，常驻在系统桌面之上显示 1/2 比例的受控画面，
+ * 并支持实时的 TAP 与 SWIPE 反向遥控手势操作注入。
+ */
 class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
     companion object {
          const val TAG = "FloatingWindowService"
+         
+         /**
+          * 标记后台悬浮窗服务当前是否正在运行
+          */
          var isRunning = false
     }
 
+    // 后台生命周期控制器，用于供给 ComposeView 所需的生命周期环境
     private val lifecycleRegistry = LifecycleRegistry(this)
+    // 页面存储容器，用于托管和追踪 ViewModel 依赖
     private val store = ViewModelStore()
+    // 已保存状态的注册控制器，供给 Compose 组件树的底层架构环境
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
 
+    // 提供生命周期接口实现
     override val lifecycle: Lifecycle get() = lifecycleRegistry
+    // 提供 ViewModel 存储实现
     override val viewModelStore: ViewModelStore get() = store
+    // 提供状态存档恢复实现
     override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
 
+    // 系统窗口管理员，用于在桌面上层添加/更新/移除全局悬浮窗组件
     private var windowManager: WindowManager? = null
+    // 自定义的 Jetpack Compose 视图容器，可直接塞入悬浮窗中
     private var floatingView: ComposeView? = null
 
+    // 悬浮窗属于后台常驻无绑定服务，默认返回 null
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 服务初始化生命周期
+     */
     override fun onCreate() {
         super.onCreate()
         isRunning = true
         Log.i(TAG, "FloatingWindowService onCreate")
+        
+        // 激活生命周期状态
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
+        // 绑定窗口管理员并创建浮空视窗
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         setupFloatingWindow()
 
-        // Monitor remote connection - if disconnected, automatically stop service
+        // 监听对端的连接存活状态 —— 一旦网络断开或宿主关闭，自动销毁悬浮窗服务确保系统纯净
         lifecycleScope.launch {
             LanRemoteViewModel.instance?.connectionState?.collectLatest { state ->
                 if (state == ConnectionState.Disconnected) {
@@ -93,27 +117,35 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         }
     }
 
+    /**
+     * 创建并装载全局系统级悬浮窗 (SYSTEM_ALERT_WINDOW)
+     */
     private fun setupFloatingWindow() {
         val context = this
         val wm = windowManager ?: return
 
+        // 设定系统悬浮窗的核心布局配置参数
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
+            // 兼容性适配：Android 8.0以上版本必须使用 TYPE_APPLICATION_OVERLAY 悬浮窗类型
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
+            // 设定无焦点属性 FLAG_NOT_FOCUSABLE (不拦截后面桌面的输入法，并保证悬浮窗可点击)，以及在屏内布局
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            // 设定悬浮窗在桌面上的起步初始化偏移坐标
             x = 150
             y = 350
         }
 
+        // 装载 Compose 环境并注入 ViewTree 关系
         val composeView = ComposeView(context).apply {
             setViewTreeLifecycleOwner(context)
             setViewTreeViewModelStoreOwner(context)
@@ -127,7 +159,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
-                // Default ratio is 1/2 of original size, maintaining perfect picture aspect ratio
+                // 根据用户要求，悬浮窗在后台独立运行，显示比例强制固定为原始捕获尺寸的 0.50 倍(1/2 比例)
                 val scaleMultiplier = 0.50f
 
                 Box(
@@ -139,7 +171,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                         .background(Color.Black)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Title bar - handles dragging globally on screen
+                        
+                        // 顶部操作手柄栏 (高36dp) — 拦截并响应物理手势，使整个悬浮窗在系统桌面上无缝拖拽移动
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -148,6 +181,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 .pointerInput(Unit) {
                                     detectDragGestures { change, dragAmount ->
                                         change.consume()
+                                        // 累加计算拖动坐标并通知 WindowManager 更新布局
                                         params.x += dragAmount.x.toInt()
                                         params.y += dragAmount.y.toInt()
                                         try {
@@ -177,6 +211,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 )
                             }
 
+                            // 独立关闭小按钮
                             IconButton(
                                 onClick = { stopSelf() },
                                 modifier = Modifier.size(24.dp)
@@ -190,7 +225,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                             }
                         }
 
-                        // Mirrored stream visualizer with gesture injectors
+                        // 画面显示与控制面板区域
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -208,9 +243,11 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .onSizeChanged { size ->
+                                            // 记录并缓存当前悬浮窗真实的物理显示宽高
                                             localViewW = size.width
                                             localViewH = size.height
                                         }
+                                        // 监听点击手势，将其逆向归一化转换成对端大屏物理像素位置，最终下发触摸指令
                                         .pointerInput(localViewW, localViewH) {
                                             detectTapGestures(
                                                 onTap = { offset ->
@@ -222,6 +259,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                                 }
                                             )
                                         }
+                                        // 监听滑动划扫手势，进行向量投影转换，直接注入滑动控制指令
                                         .pointerInput(localViewW, localViewH) {
                                             var dragStartX = 0f
                                             var dragStartY = 0f
@@ -274,6 +312,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         }
 
         try {
+            // 向屏幕添加全局 Overlay 悬浮视图层
             wm.addView(composeView, params)
             floatingView = composeView
         } catch (e: Exception) {
@@ -282,11 +321,15 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         }
     }
 
+    /**
+     * 服务被销毁生命周期
+     */
     override fun onDestroy() {
         isRunning = false
         Log.i(TAG, "FloatingWindowService onDestroy")
         floatingView?.let { view ->
             try {
+                // 彻底释放全局 Overlay 视图，杜绝悬浮窗内存泄漏
                 windowManager?.removeView(view)
             } catch (e: Exception) {
                 Log.e(TAG, "Error removing dynamic window view: ${e.message}")
