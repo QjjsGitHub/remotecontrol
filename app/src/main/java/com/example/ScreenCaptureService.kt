@@ -123,6 +123,12 @@ class ScreenCaptureService : Service() {
         val captureHeight = (height * 0.35f).toInt()
 
         imageReader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                Log.i(TAG, "MediaProjection stopped")
+                stopSelf()
+            }
+        }, Handler(Looper.getMainLooper()))
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
             captureWidth,
