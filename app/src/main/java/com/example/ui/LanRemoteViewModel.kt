@@ -46,11 +46,6 @@ class LanRemoteViewModel : ViewModel() {
             private set
     }
 
-    init {
-        instance = this
-        startDiscovery()
-    }
-
     // Current Screen Role
     private val _currentRole = MutableStateFlow(Role.NONE)
     val currentRole: StateFlow<Role> = _currentRole.asStateFlow()
@@ -99,6 +94,11 @@ class LanRemoteViewModel : ViewModel() {
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
     private var socketClient: SocketClient? = null
+
+    init {
+        instance = this
+        startDiscovery()
+    }
 
     fun selectRole(role: Role, context: Context? = null) {
         _currentRole.value = role

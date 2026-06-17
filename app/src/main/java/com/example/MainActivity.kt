@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -55,9 +56,22 @@ import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
+import android.content.pm.PackageManager
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
+
+    // Launcher for requesting background notification permission
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Log.d("MainActivity", "Notification permission approved")
+        } else {
+            Log.w("MainActivity", "Notification permission denied")
+        }
+    }
 
     // Activity launcher for capturing authorization
     private val recordResultLauncher = registerForActivityResult(
@@ -85,6 +99,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         
+        // Request POST_NOTIFICATIONS on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
         setContent {
             MyApplicationTheme {
                 SimplifiedDashboardScreen(
@@ -251,6 +272,9 @@ fun SimplifiedDashboardScreen(
                                     viewModel.stopServer(context)
                                 } else {
                                     viewModel.startServer(context)
+                                    if (!com.example.ScreenCaptureService.isRunning) {
+                                        onRequestScreenShare()
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -643,7 +667,7 @@ fun SimplifiedDashboardScreen(
 
             // ------------------ INTERACTIVE FLOATING PICTURE-IN-PICTURE (PIP) SCREEN MIRROR OVERLAY ------------------
             val activeBitmap = mirroredBitmap
-            if (connectionState == ConnectionState.Connected && activeBitmap != null) {
+            if (connectionState == ConnectionState.Connected) {
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(floatX.roundToInt(), floatY.roundToInt()) }
@@ -681,62 +705,94 @@ fun SimplifiedDashboardScreen(
                         }
 
                         // Live Canvas Frame with Action Event Handlers
-                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                            var localFrameW by remember { mutableStateOf(1) }
-                            var localFrameH by remember { mutableStateOf(1) }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (activeBitmap != null) {
+                                var localFrameW by remember { mutableStateOf(1) }
+                                var localFrameH by remember { mutableStateOf(1) }
 
-                            Image(
-                                bitmap = activeBitmap.asImageBitmap(),
-                                contentDescription = "Active live frame stream from server",
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .onSizeChanged { size ->
-                                        localFrameW = size.width
-                                        localFrameH = size.height
-                                    }
-                                    .pointerInput(localFrameW, localFrameH) {
-                                        detectTapGestures(
-                                            onTap = { offset ->
-                                                if (localFrameW > 0 && localFrameH > 0) {
-                                                    val rx = offset.x / localFrameW
-                                                    val ry = offset.y / localFrameH
-                                                    viewModel.sendClientAction("TAP:$rx,$ry")
-                                                }
-                                            }
-                                        )
-                                    }
-                                    .pointerInput(localFrameW, localFrameH) {
-                                        var dragStartX = 0f
-                                        var dragStartY = 0f
-                                        detectDragGestures(
-                                            onDragStart = { offset ->
-                                                dragStartX = offset.x
-                                                dragStartY = offset.y
-                                            },
-                                            onDragEnd = {},
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                val currentX = change.position.x
-                                                val currentY = change.position.y
-                                                if (localFrameW > 0 && localFrameH > 0) {
-                                                    val distSq = (currentX - dragStartX) * (currentX - dragStartX) + (currentY - dragStartY) * (currentY - dragStartY)
-                                                    if (distSq > 400) { // Mapping swipe action
-                                                        val rsx = dragStartX / localFrameW
-                                                        val rsy = dragStartY / localFrameH
-                                                        val rex = currentX / localFrameW
-                                                        val rey = currentY / localFrameH
-                                                        viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
-                                                        
-                                                        // continuous loop
-                                                        dragStartX = currentX
-                                                        dragStartY = currentY
+                                Image(
+                                    bitmap = activeBitmap.asImageBitmap(),
+                                    contentDescription = "Active live frame stream from server",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .onSizeChanged { size ->
+                                            localFrameW = size.width
+                                            localFrameH = size.height
+                                        }
+                                        .pointerInput(localFrameW, localFrameH) {
+                                            detectTapGestures(
+                                                onTap = { offset ->
+                                                    if (localFrameW > 0 && localFrameH > 0) {
+                                                        val rx = offset.x / localFrameW
+                                                        val ry = offset.y / localFrameH
+                                                        viewModel.sendClientAction("TAP:$rx,$ry")
                                                     }
                                                 }
-                                            }
-                                        )
-                                    },
-                                contentScale = ContentScale.Fit
-                            )
+                                            )
+                                        }
+                                        .pointerInput(localFrameW, localFrameH) {
+                                            var dragStartX = 0f
+                                            var dragStartY = 0f
+                                            detectDragGestures(
+                                                onDragStart = { offset ->
+                                                    dragStartX = offset.x
+                                                    dragStartY = offset.y
+                                                },
+                                                onDragEnd = {},
+                                                onDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    val currentX = change.position.x
+                                                    val currentY = change.position.y
+                                                    if (localFrameW > 0 && localFrameH > 0) {
+                                                        val distSq = (currentX - dragStartX) * (currentX - dragStartX) + (currentY - dragStartY) * (currentY - dragStartY)
+                                                        if (distSq > 400) { // Mapping swipe action
+                                                            val rsx = dragStartX / localFrameW
+                                                            val rsy = dragStartY / localFrameH
+                                                            val rex = currentX / localFrameW
+                                                            val rey = currentY / localFrameH
+                                                            viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
+                                                            
+                                                            // continuous loop
+                                                            dragStartX = currentX
+                                                            dragStartY = currentY
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        },
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        "连接成功 🔗",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        "等待服务端开启录屏...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
                 }

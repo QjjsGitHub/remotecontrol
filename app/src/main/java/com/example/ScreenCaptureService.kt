@@ -41,8 +41,9 @@ class ScreenCaptureService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     
-    private var captureHandler: Handler? = null
-    private var captureRunnable: Runnable? = null
+    private var backgroundThread: android.os.HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+    private var lastFrameTime = 0L
     private val frameRateMs = 250L // 4 frames per second is super stable and preserves network bandwidth
 
     override fun onCreate() {
@@ -63,22 +64,41 @@ class ScreenCaptureService : Service() {
         }
 
         val resultCode = intent?.getIntExtra("RESULT_CODE", -1) ?: -1
-        val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra("DATA", Intent::class.java)
-        } else {
+        val data = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent?.getParcelableExtra("DATA", Intent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent?.getParcelableExtra<Intent>("DATA")
+            }
+        } catch (e: Throwable) {
             @Suppress("DEPRECATION")
             intent?.getParcelableExtra<Intent>("DATA")
         }
 
         if (resultCode == -1 || data == null) {
             Log.e(TAG, "Result code or data intent is null. Stopping service...")
+            LanRemoteViewModel.instance?.addServerLog("投屏启动失败：授权数据为空", com.example.ui.LogType.WARNING)
             stopSelf()
             return START_NOT_STICKY
         }
 
-        mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
-        if (mediaProjection == null) {
-            Log.e(TAG, "Failed to get MediaProjection instance")
+        try {
+            mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
+            if (mediaProjection == null) {
+                Log.e(TAG, "Failed to get MediaProjection instance")
+                LanRemoteViewModel.instance?.addServerLog("投屏授权获取失败：MediaProjection projection is null", com.example.ui.LogType.WARNING)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException getting MediaProjection: ${e.message}")
+            LanRemoteViewModel.instance?.addServerLog("系统投屏拒绝授权或已被占用: ${e.message}", com.example.ui.LogType.WARNING)
+            stopSelf()
+            return START_NOT_STICKY
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error getting MediaProjection: ${e.message}")
+            LanRemoteViewModel.instance?.addServerLog("创建投屏引擎异常: ${e.message}", com.example.ui.LogType.WARNING)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -98,7 +118,7 @@ class ScreenCaptureService : Service() {
         // Feed actual size info to view-model so clients know screen layout dimensions
         LanRemoteViewModel.instance?.onScreenSizeDetermined(width, height)
 
-        // To save bandwidth, scale captured frame size (e.g. 1/3 scale to maintain exact performance)
+        // To save bandwidth, scale captured frame size (e.g. 0.35 scale to maintain performance)
         val captureWidth = (width * 0.35f).toInt()
         val captureHeight = (height * 0.35f).toInt()
 
@@ -114,15 +134,28 @@ class ScreenCaptureService : Service() {
             null
         )
 
-        // Setup capture polling loop with some rate limiting
-        captureHandler = Handler(Looper.getMainLooper())
-        captureRunnable = object : Runnable {
-            override fun run() {
+        // Set up background handler thread to offload image processing completely from main thread
+        backgroundThread = android.os.HandlerThread("ScreenCaptureBackground").apply { start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+
+        imageReader?.setOnImageAvailableListener({ reader ->
+            val now = System.currentTimeMillis()
+            if (now - lastFrameTime >= frameRateMs) {
+                lastFrameTime = now
                 acquireAndBroadcastFrame(captureWidth, captureHeight)
-                captureHandler?.postDelayed(this, frameRateMs)
+            } else {
+                // Read and discard to keep image queue empty
+                var img: android.media.Image? = null
+                try {
+                    img = reader.acquireLatestImage()
+                } catch (ignored: Exception) {
+                } finally {
+                    img?.close()
+                }
             }
-        }
-        captureRunnable?.let { captureHandler?.post(it) }
+        }, backgroundHandler)
+
+        LanRemoteViewModel.instance?.addServerLog("投屏引擎并后台采集开启成功", com.example.ui.LogType.SUCCESS)
     }
 
     private fun acquireAndBroadcastFrame(width: Int, height: Int) {
@@ -145,10 +178,29 @@ class ScreenCaptureService : Service() {
             )
             bitmap.copyPixelsFromBuffer(buffer)
 
-            // Compress to JPEG size-friendly format
+            // Crop out excess row alignment padding if any is present
+            val cleanBitmap = if (rowPadding > 0) {
+                try {
+                    val cropped = Bitmap.createBitmap(bitmap, 0, 0, width, height)
+                    bitmap.recycle()
+                    cropped
+                } catch (e: Exception) {
+                    bitmap
+                }
+            } else {
+                bitmap
+            }
+
+            // Compress cleanBitmap to JPEG size-friendly format
             val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 45, stream)
+            cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 45, stream)
             val bytes = stream.toByteArray()
+            
+            if (cleanBitmap != bitmap) {
+                cleanBitmap.recycle()
+            } else {
+                bitmap.recycle()
+            }
             
             val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
             
@@ -188,10 +240,11 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        captureRunnable?.let { captureHandler?.removeCallbacks(it) }
+        imageReader?.setOnImageAvailableListener(null, null)
         virtualDisplay?.release()
         mediaProjection?.stop()
         imageReader?.close()
+        backgroundThread?.quitSafely()
         Log.i(TAG, "ScreenCaptureService Stopped")
         super.onDestroy()
     }
