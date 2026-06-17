@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">屏幕共控</string>
+    <string name="accessibility_description">用于接收远端客户端发送的触控指令，并在服务端屏幕上自动模拟点击操作以实现远端屏幕反控。</string>
+</resources>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Active Wifi Signal Waves -->
+    <path
+        android:pathData="M34,44 C42,32 66,32 74,44"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeColor="#00E5FF"/>
+    <path
+        android:pathData="M24,34 C39,18 69,18 84,34"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeColor="#2979FF"/>
+    <!-- Outer glowing signal spots -->
+    <path
+        android:pathData="M44,54 C48,46 60,46 64,54"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeColor="#00E5FF"/>
+    <!-- Central Control Device Core Console -->
+    <path
+        android:pathData="M38,62 h32 v22 a6,6 0 0,1 -6,6 h-20 a6,6 0 0,1 -6,-6 z"
+        android:fillColor="#0A0E1A"
+        android:strokeWidth="2.5"
+        android:strokeColor="#2979FF"/>
+    <!-- Touch D-Pad Indicator -->
+    <path
+        android:pathData="M54,66 v14 M47,73 h14"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeColor="#00E5FF"/>
+    <!-- Active Glow Signal Dot -->
+    <path
+        android:pathData="M54,48 A2,2 0 0,0 54,52 A2,2 0 0,0 54,48 Z"
+        android:fillColor="#00E5FF"/>
+</vector>

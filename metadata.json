@@ -1,0 +1,6 @@
+{
+  "name": "屏幕共控",
+  "description": "服务端点击开启开启录屏并将画面分享给客户端，客户端通过连接后在悬浮窗口显示服务端屏幕，并在触碰时完成远端点击操作。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
