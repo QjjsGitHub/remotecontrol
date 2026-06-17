@@ -63,7 +63,7 @@ class ScreenCaptureService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        val resultCode = intent?.getIntExtra("RESULT_CODE", -1) ?: -1
+        val resultCode = intent?.getIntExtra("RESULT_CODE", android.app.Activity.RESULT_CANCELED) ?: android.app.Activity.RESULT_CANCELED
         val data = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getParcelableExtra("DATA", Intent::class.java)
@@ -76,9 +76,9 @@ class ScreenCaptureService : Service() {
             intent?.getParcelableExtra<Intent>("DATA")
         }
 
-        if (resultCode == -1 || data == null) {
-            Log.e(TAG, "Result code or data intent is null. Stopping service...")
-            LanRemoteViewModel.instance?.addServerLog("投屏启动失败：授权数据为空", com.example.ui.LogType.WARNING)
+        if (resultCode != android.app.Activity.RESULT_OK || data == null) {
+            Log.e(TAG, "Result code is not OK or data intent is null. Stopping service...")
+            LanRemoteViewModel.instance?.addServerLog("投屏启动失败：未获得用户授权", com.example.ui.LogType.WARNING)
             stopSelf()
             return START_NOT_STICKY
         }
