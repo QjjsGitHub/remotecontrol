@@ -144,10 +144,13 @@ fun SimplifiedDashboardScreen(
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
     var activeLogTab by remember { mutableStateOf(0) } // 0 = Feedback/Server, 1 = Controller
 
-    // Periodically query the status of accessibility service
+    var isBgOverlayActive by remember { mutableStateOf(false) }
+
+    // Periodically query the status of accessibility and floating window services
     LaunchedEffect(Unit) {
         while (true) {
             isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
+            isBgOverlayActive = FloatingWindowService.isRunning
             delay(1500)
         }
     }
@@ -155,7 +158,7 @@ fun SimplifiedDashboardScreen(
     // Drag / Floating Window State properties
     var floatX by remember { mutableStateOf(100f) }
     var floatY by remember { mutableStateOf(400f) }
-    var scaleMultiplier by remember { mutableStateOf(0.40f) }
+    var scaleMultiplier by remember { mutableStateOf(0.50f) }
 
     Scaffold(
         modifier = Modifier
@@ -556,6 +559,64 @@ fun SimplifiedDashboardScreen(
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.fillMaxWidth()
                             )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text(
+                                "📱 后台独立全局悬浮窗",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "开启后，可在返回系统桌面或其他应用时，继续显示 1/2 比例的对端画面并进行反向遥控操作:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Button(
+                                onClick = {
+                                    if (isBgOverlayActive) {
+                                        val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                                        context.stopService(serviceIntent)
+                                        isBgOverlayActive = false
+                                    } else {
+                                        if (!android.provider.Settings.canDrawOverlays(context)) {
+                                            Toast.makeText(context, "请先授予：显示在其他应用上层 (悬浮窗权限)", Toast.LENGTH_LONG).show()
+                                            val intent = Intent(
+                                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                android.net.Uri.parse("package:${context.packageName}")
+                                            )
+                                            context.startActivity(intent)
+                                        } else {
+                                            val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                                            context.startService(serviceIntent)
+                                            isBgOverlayActive = true
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isBgOverlayActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isBgOverlayActive) androidx.compose.material.icons.Icons.Default.Close else androidx.compose.material.icons.Icons.Default.Share,
+                                        contentDescription = "Background Floating Window Toggle",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isBgOverlayActive) "关闭后台悬浮窗" else "开启后台显示悬浮窗 (比例为 1/2)")
+                                }
+                            }
                         }
                     }
                 }
