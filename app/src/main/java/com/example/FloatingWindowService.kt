@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -101,8 +102,9 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         Log.i(TAG, "FloatingWindowService onCreate")
         
         // 激活生命周期状态
-        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
         // 绑定窗口管理员并创建浮空视窗
@@ -162,15 +164,25 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
-                // 默认比例1/3 (0.33f)，且由 mutableState 管理，支持双指进行动态手势缩放窗口
-                var scaleMultiplier by remember { mutableStateOf(0.33f) }
+                // 获取客户端当前屏幕配置，用于自适应基准宽度计算
+                val configuration = LocalConfiguration.current
+                val clientScreenWidthDp = configuration.screenWidthDp.toFloat()
+
+                // 订阅来自 ViewModel 的全局悬浮窗缩放比例 (双向绑定，与主界面 Slider 同步)
+                val scaleMultiplier by viewModel.floatingScaleMultiplier.collectAsState()
+                
                 // 触摸锁定状态：为 true 时，支持双指手势缩放窗口；为 false 时，响应远程滑动/点击操作
                 var isTouchLocked by remember { mutableStateOf(false) }
 
+                // 依据远端画布分辨率自动计算宽高纵横比，实现完美的自适应缩放，且高度随宽度弹性拉伸
+                val aspectRatio = if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
+                val windowWidthDp = (clientScreenWidthDp / 3f) * scaleMultiplier
+                val windowHeightDp = windowWidthDp * aspectRatio
+
                 Box(
                     modifier = Modifier
-                        .width((mirroredWidth * scaleMultiplier).dp)
-                        .height(((mirroredHeight * scaleMultiplier) + 36).dp)
+                        .width(windowWidthDp.dp)
+                        .height((windowHeightDp + 36).dp)
                         .clip(RoundedCornerShape(16.dp))
                         .border(3.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
                         .background(Color.Black)
@@ -268,11 +280,12 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        // 监听双指手势缩放画面 (仅在锁定状态下生效)
+                                        // 监听双指手势缩放画面（仅在触摸锁定状态下生效，并更新全局 ViewModel 比例使与 Slider 同步）
                                         .pointerInput(isTouchLocked) {
                                             if (isTouchLocked) {
                                                 detectTransformGestures { _, _, zoom, _ ->
-                                                    scaleMultiplier = (scaleMultiplier * zoom).coerceIn(0.15f, 1.20f)
+                                                    val newScale = (scaleMultiplier * zoom).coerceIn(0.4f, 3.0f)
+                                                    viewModel.updateFloatingScaleMultiplier(newScale)
                                                 }
                                             }
                                         }

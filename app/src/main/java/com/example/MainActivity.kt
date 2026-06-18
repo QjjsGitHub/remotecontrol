@@ -42,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -182,10 +183,12 @@ fun SimplifiedDashboardScreen(
         }
     }
 
-    // Drag / Floating Window State properties
+    // 坐标与拖拽状态变量
     var floatX by remember { mutableStateOf(100f) }
     var floatY by remember { mutableStateOf(400f) }
-    var scaleMultiplier by remember { mutableStateOf(0.50f) }
+    
+    // 订阅全局悬浮窗的比例系数 (直接与 ViewModel 的状态进行双向订阅绑定，与后台悬浮窗保持完美同步)
+    val scaleMultiplier by viewModel.floatingScaleMultiplier.collectAsState()
 
     Scaffold(
         modifier = Modifier
@@ -555,31 +558,40 @@ fun SimplifiedDashboardScreen(
                             }
                         }
 
-                        // Window config sub-panel (Only show if connected with feed)
+                        // 悬浮窗高级参数配置子面板 (仅在建立连接并成功接收捕获帧时显示)
                         if (connectionState == ConnectionState.Connected && mirroredBitmap != null) {
                             Spacer(modifier = Modifier.height(12.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
-                                "📐 悬浮窗口尺寸比例调配 (Slider)",
+                                "📐 悬浮窗口尺寸比例调配",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "滑动改变对端在大屏悬浮窗里的微缩大小，避免遮挡本地信息:",
+                                "滑动改变远端在大屏悬浮窗里的自适应微缩尺寸，可精准调节大小避免遮挡本地信息:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
 
+                            // 基于当前设备真实 DP 宽度来作自适应换算，保证任何分辨率密度的手机上显示比例的一致性
+                            val configuration = LocalConfiguration.current
+                            val clientScreenWidthDp = configuration.screenWidthDp.toFloat()
+                            // 依据远端画面纵横比自适应高度
+                            val aspectRatio = if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
+                            // 默认尺寸标准是占屏幕宽度的 1/3 (即这里的 clientScreenWidthDp / 3f)，再乘以 Slider 传递出的缩放系数
+                            val currentWidthDp = (clientScreenWidthDp / 3f) * scaleMultiplier
+                            val currentHeightDp = currentWidthDp * aspectRatio
+
                             Slider(
                                 value = scaleMultiplier,
-                                onValueChange = { scaleMultiplier = it },
-                                valueRange = 0.2f..0.85f,
+                                onValueChange = { viewModel.updateFloatingScaleMultiplier(it) },
+                                valueRange = 0.5f..2.5f,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Text(
-                                text = "悬浮窗尺寸: ${(mirroredWidth * scaleMultiplier).roundToInt()}dp x ${(mirroredHeight * scaleMultiplier).roundToInt()}dp (缩放率: ${(scaleMultiplier * 100).toInt()}%)",
+                                text = "预计尺寸: ${currentWidthDp.roundToInt()}dp x ${currentHeightDp.roundToInt()}dp (缩放率: ${(scaleMultiplier * 100).toInt()}%)",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.secondary,
@@ -597,7 +609,7 @@ fun SimplifiedDashboardScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "开启后，可在返回系统桌面或其他应用时，继续显示 1/2 比例的对端画面并进行反向遥控操作:",
+                                "开启后，在返回桌面时将以默认 1/3 屏幕宽度自适应悬浮显示对端画面。在悬浮窗上锁定触摸后支持双指手势缩放，解锁时支持反向遥控操作:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -641,7 +653,7 @@ fun SimplifiedDashboardScreen(
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (isBgOverlayActive) "关闭后台悬浮窗" else "开启后台显示悬浮窗 (比例为 1/2)")
+                                    Text(if (isBgOverlayActive) "关闭后台悬浮窗" else "开启后台显示自适应悬浮窗")
                                 }
                             }
                         }

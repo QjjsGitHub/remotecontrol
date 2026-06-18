@@ -89,6 +89,19 @@ class LanRemoteViewModel : ViewModel() {
     private val _mirroredHeight = MutableStateFlow(2400)
     val mirroredHeight: StateFlow<Int> = _mirroredHeight.asStateFlow()
 
+    // 悬浮窗的缩放比例状态流，默认设为 1.0f (基准为客户端屏幕宽度的 1/3)
+    // 使得 MainActivity 的 Slider 控制可直接与 FloatingWindowService 悬浮窗口保持实时、双向的同步适配
+    private val _floatingScaleMultiplier = MutableStateFlow(1.0f)
+    val floatingScaleMultiplier: StateFlow<Float> = _floatingScaleMultiplier.asStateFlow()
+
+    /**
+     * 更新全局悬浮窗的缩放比例
+     * @param value 新的缩放比例值
+     */
+    fun updateFloatingScaleMultiplier(value: Float) {
+        _floatingScaleMultiplier.value = value
+    }
+
     // Network component references
     private var socketServer: SocketServer? = null
     private var udpBroadcaster: UdpBroadcaster? = null
