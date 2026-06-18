@@ -432,6 +432,14 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
     }
 }
 
+/**
+ * 视频帧表面视图呈现组件 (VideoSurfaceViewer)
+ * 通过封装底层 SurfaceView 并初始化 Android 独占的 MediaCodec H.264 硬件解码器，
+ * 将接收自服务端的 H.264 编码切片帧流高速还原绘制到手机悬浮窗上。
+ *
+ * @param viewModel 被订阅的共控核心业务 ViewModel 实例 [LanRemoteViewModel]
+ * @param modifier 界面样式修饰 Modifier
+ */
 @Composable
 fun VideoSurfaceViewer(
     viewModel: LanRemoteViewModel,
@@ -469,7 +477,7 @@ fun VideoSurfaceViewer(
                     outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
                 }
             } catch (e: Exception) {
-                Log.e("VideoSurfaceViewer", "Subsurface slice decode error: ${e.message}")
+                Log.e("VideoSurfaceViewer", "视频硬解码切片输入排队失败或数据损毁: ${e.message}")
             }
         }
     }
@@ -486,7 +494,7 @@ fun VideoSurfaceViewer(
                             codec.start()
                             decoderRef.value = codec
 
-                            // Immediately queue the cached configuration frame (SPS/PPS) to initialize the decoder parameters
+                            // 首次建立 Surface 时，立即注入此前本地缓存的 SPS/PPS 配置帧 (flags=2)，初始化解码参数以避免画面加载首帧发黑
                             viewModel.clientCodecConfig.value?.let { configFrame ->
                                 try {
                                     val inputIndex = codec.dequeueInputBuffer(10000)
@@ -496,15 +504,15 @@ fun VideoSurfaceViewer(
                                             inputBuffer.clear()
                                             inputBuffer.put(configFrame.first)
                                             codec.queueInputBuffer(inputIndex, 0, configFrame.first.size, configFrame.third, configFrame.second)
-                                            Log.d("VideoSurfaceViewer", "Successfully recovered and queued cached config frame of size: ${configFrame.first.size}")
+                                            Log.d("VideoSurfaceViewer", "解码器启动时已成功自动填充 SPS/PPS 缓存配置帧, 大小: ${configFrame.first.size}")
                                         }
                                     }
                                 } catch (e: Exception) {
-                                    Log.e("VideoSurfaceViewer", "Failed to queue cached config frame on start: ${e.message}")
+                                    Log.e("VideoSurfaceViewer", "启动注入 SPS/PPS 缓存特征包失败: ${e.message}")
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e("VideoSurfaceViewer", "Failed to start AVC decoder: ${e.message}")
+                            Log.e("VideoSurfaceViewer", "构建/配置 H.264 解码器实例时报错崩溃: ${e.message}")
                         }
                     }
 
@@ -515,7 +523,7 @@ fun VideoSurfaceViewer(
                             decoderRef.value?.stop()
                             decoderRef.value?.release()
                         } catch (e: Exception) {
-                            Log.e("VideoSurfaceViewer", "Relinquish decoder failure: ${e.message}")
+                            Log.e("VideoSurfaceViewer", "销毁解码器或回收物理内存失败: ${e.message}")
                         }
                         decoderRef.value = null
                     }

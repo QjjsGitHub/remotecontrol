@@ -63,23 +63,23 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
 
-    // Launcher for requesting background notification permission
+    // 用于在 Android 13+ 系统上动态请求推送通知权限的启动器
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            Log.d("MainActivity", "Notification permission approved")
+            Log.d("MainActivity", "通知权限已批准")
         } else {
-            Log.w("MainActivity", "Notification permission denied")
+            Log.w("MainActivity", "通知权限被拒绝")
         }
     }
 
-    // Activity launcher for capturing authorization
+    // 用于发起并接收系统高级屏幕截图许可的 Activity 启动器
     private val recordResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // Start the Screen Capture service with captured result token
+            // 在用户授权捕获屏幕后，将相关 token 数据下发至 ScreenCaptureService 并启动前台录屏进程
             val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                 putExtra("RESULT_CODE", result.resultCode)
                 putExtra("DATA", result.data)
@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         
-        // Request POST_NOTIFICATIONS on Android 13+
+        // 如果运行在 Android 13 (Tiramisu) 级别以上的系统，检查并动态请求 POST_NOTIFICATIONS 推送通知权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -120,6 +120,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 屏幕共控助手极简配置主看板面 (SimplifiedDashboardScreen)
+ *
+ * @param onRequestScreenShare 请求拉起系统流式投屏录制组件授权的回调方法
+ */
 @Composable
 fun SimplifiedDashboardScreen(
     onRequestScreenShare: () -> Unit
@@ -127,7 +132,7 @@ fun SimplifiedDashboardScreen(
     val viewModel: LanRemoteViewModel = viewModel()
     val context = LocalContext.current
 
-    // State bindings
+    // 数据状态流的双向绑定订阅
     val isServerRunning by viewModel.isServerRunning.collectAsState()
     val serverIp by viewModel.serverIp.collectAsState()
     val connectedClients by viewModel.connectedClients.collectAsState()
@@ -143,11 +148,11 @@ fun SimplifiedDashboardScreen(
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
-    var activeLogTab by remember { mutableStateOf(0) } // 0 = Feedback/Server, 1 = Controller
+    var activeLogTab by remember { mutableStateOf(0) } // 0 = 服务端日志, 1 = 客户端日志
 
     var isBgOverlayActive by remember { mutableStateOf(false) }
 
-    // Periodically query the status of accessibility and floating window services
+    // 定时轮询被控端所需的系统级无障碍状态服务与桌面悬浮窗状态服务是否正在处于健康运行中
     LaunchedEffect(Unit) {
         while (true) {
             isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
@@ -156,7 +161,7 @@ fun SimplifiedDashboardScreen(
         }
     }
 
-    // Automatically launch background floating window on connection to remote control
+    // 监听连接状态的变化：一旦连接打通，检查并在此被控设备大盘上自动发起并加载后台常驻桌面悬浮窗
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.Connected) {
             if (Settings.canDrawOverlays(context)) {
@@ -174,7 +179,7 @@ fun SimplifiedDashboardScreen(
                 context.startActivity(intent)
             }
         } else {
-            // connection lost, we can stop the floating service if running
+            // 通道意外中断，或人为主动切断连接后，彻底释放并注销大屏悬浮窗
             if (FloatingWindowService.isRunning) {
                 val serviceIntent = Intent(context, FloatingWindowService::class.java)
                 context.stopService(serviceIntent)
@@ -200,7 +205,7 @@ fun SimplifiedDashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Main unified scrollable layout
+            // 采用一站式带安全间距的滚动渲染布局容器
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -208,7 +213,7 @@ fun SimplifiedDashboardScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Elegant branding header
+                // 配色酷炫优雅的 App 招牌栏 (Elegant branding header)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -673,7 +678,7 @@ fun SimplifiedDashboardScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Tab Selector
+                            // 日志分类栏选择滑块 (Tab Selector)
                             Row(
                                 modifier = Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp)).padding(2.dp)
                             ) {
@@ -701,7 +706,7 @@ fun SimplifiedDashboardScreen(
                                 )
                             }
 
-                            // Clear logs
+                            // 一键清空当前选定面板缓存日志 (Clear logs)
                             TextButton(
                                 onClick = {
                                     if (activeLogTab == 0) viewModel.clearServerLogs() else viewModel.clearControllerLogs()
@@ -714,10 +719,10 @@ fun SimplifiedDashboardScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Box holding the tab contents
+                        // 日志视图容器控制栏 (Box holding the tab contents)
                         Box(modifier = Modifier.fillMaxSize()) {
                             if (activeLogTab == 0) {
-                                // Server Logs
+                                // 服务端日志显示面板 (Server Logs)
                                 if (serverLogs.isEmpty()) {
                                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                         Text("无服务端交互反馈事件...", color = MaterialTheme.colorScheme.outline, fontSize = 12.sp)
@@ -738,7 +743,7 @@ fun SimplifiedDashboardScreen(
                                     }
                                 }
                             } else {
-                                // Client Logs
+                                // 客户端/控制端日志显示面板 (Client Logs)
                                 if (controllerLogs.isEmpty()) {
                                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                         Text("无客户端操作日志...", color = MaterialTheme.colorScheme.outline, fontSize = 12.sp)
@@ -764,12 +769,16 @@ fun SimplifiedDashboardScreen(
                 }
             }
 
-            // ------------------ INTERACTIVE FLOATING PICTURE-IN-PICTURE (PIP) SCREEN MIRROR OVERLAY ------------------
-            // Disabled inside App floating window preview as it is deprecated to use background overlay service exclusively
+            // 桌面流画面遥控映射已经通过桌面级别 overlay 悬浮窗机制专门处理，不再在此宿主容器内提供冗余画布。
         }
     }
 }
 
+/**
+ * 依据服务端工作状态自适应返回彩色卡片边框
+ * @param active 服务端是否正在开启中
+ * @return 组装好的 BorderStroke 样式组件
+ */
 @Composable
 fun borderStrokeForServer(active: Boolean): BorderStroke {
     return if (active) {
@@ -779,6 +788,11 @@ fun borderStrokeForServer(active: Boolean): BorderStroke {
     }
 }
 
+/**
+ * 依据控制客户端对准状态自适应返回彩色卡片边框
+ * @param conState 客户端套接字连接阶段状态 [ConnectionState]
+ * @return 组装好的 BorderStroke 样式组件
+ */
 @Composable
 fun borderStrokeForClient(conState: ConnectionState): BorderStroke {
     return if (conState == ConnectionState.Connected) {

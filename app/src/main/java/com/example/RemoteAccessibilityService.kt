@@ -7,6 +7,10 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
+/**
+ * 远程触控辅助输入服务 (RemoteAccessibilityService)
+ * 继承自系统的 AccessibilityService，用于在被控制端(服务端)模拟全局的触摸、滑动等手势操作。
+ */
 class RemoteAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -14,17 +18,21 @@ class RemoteAccessibilityService : AccessibilityService() {
         private var instance: RemoteAccessibilityService? = null
 
         /**
-         * Simulates a single-point click/tap globally
+         * 在屏幕的全局指定坐标处模拟单点轻触(点击)操作
+         * @param x 目标点击位置的X轴物理像素坐标
+         * @param y 目标点击位置的Y轴物理像素坐标
+         * @return 如果手势分发请求成功发送则返回 true，否则返回 false
          */
         fun performTap(x: Float, y: Float): Boolean {
             val inst = instance
             if (inst == null) {
-                Log.w(TAG, "Cannot tap: RemoteAccessibilityService is not enabled/running")
+                Log.w(TAG, "无法执行点击：辅助服务未启用或未处于运行状态")
                 return false
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 val path = Path()
                 path.moveTo(x, y)
+                // 模拟耗时 50 毫秒的单点轻刷，达成点击效果
                 val stroke = GestureDescription.StrokeDescription(path, 0, 50)
                 val builder = GestureDescription.Builder()
                 builder.addStroke(stroke)
@@ -34,12 +42,18 @@ class RemoteAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Simulates a drag/swipe gesture globally
+         * 在屏幕上模拟全局的滑动/拖动轨迹手势
+         * @param startX 起点位置的X轴物理像素坐标
+         * @param startY 起点位置的Y轴物理像素坐标
+         * @param endX 终点位置的X轴物理像素坐标
+         * @param endY 终点位置的Y轴物理像素坐标
+         * @param durationMs 滑动手势的持续时间，单位毫秒，默认 300 毫秒
+         * @return 如果手势滑动请求成功发送则返回 true，否则返回 false
          */
         fun performSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 300): Boolean {
             val inst = instance
             if (inst == null) {
-                Log.w(TAG, "Cannot swipe: RemoteAccessibilityService is not enabled/running")
+                Log.w(TAG, "无法执行滑动：辅助服务未启用或未处于运行状态")
                 return false
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -55,32 +69,46 @@ class RemoteAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Checks if the Accessibility Service is active and bound
+         * 获取当前触控辅助服务的存活运行状态
+         * @return 服务如果已被系统激活并绑定则返回 true，否则返回 false
          */
         fun isServiceRunning(): Boolean {
             return instance != null
         }
     }
 
+    /**
+     * 当辅助服务被系统成功开启并连接时回调，此时缓存当前服务实例以供全局快捷调用
+     */
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "RemoteAccessibilityService Active and Bound successfully")
+        Log.i(TAG, "远程触控辅助服务成功激活并绑定")
     }
 
+    /**
+     * 服务销毁时回调，安全清空静态实例引用，避免内存泄漏
+     */
     override fun onDestroy() {
         super.onDestroy()
         if (instance == this) {
             instance = null
         }
-        Log.i(TAG, "RemoteAccessibilityService Destroyed")
+        Log.i(TAG, "远程触控辅助服务已销毁")
     }
 
+    /**
+     * 监听系统无障碍事件的回调方法
+     * @param event 系统拦截并产生的分发事件
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // No event listening required, purely gesture injector
+        // 无需监听或截获任何系统的无障碍事件流，此服务纯粹用作全局手势注入器
     }
 
+    /**
+     * 服务被系统中断或意外挂起时的回调
+     */
     override fun onInterrupt() {
-        // No interrupt handling needed
+        // 无需处理中断后的收尾逻辑
     }
 }

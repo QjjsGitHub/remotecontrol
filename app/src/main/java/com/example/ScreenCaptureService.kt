@@ -169,9 +169,9 @@ class ScreenCaptureService : Service() {
         try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, captureWidth, captureHeight)
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000) // 2 Mbps
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30) // 30 FPS
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 second I-Frame
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000) // 2 Mbps 比特率
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30) // 30 帧速率 (FPS)
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 秒一个关键帧 (I-Frame)
 
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)

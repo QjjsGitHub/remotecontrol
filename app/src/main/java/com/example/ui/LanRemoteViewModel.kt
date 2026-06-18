@@ -50,60 +50,71 @@ class LanRemoteViewModel : ViewModel() {
             private set
     }
 
-    // Current Screen Role
+    // 当前模式：控制端/被控端(服务端)/未配对
     private val _currentRole = MutableStateFlow(Role.NONE)
     val currentRole: StateFlow<Role> = _currentRole.asStateFlow()
 
-    // Server State
+    // 被控端(服务端)运行状态
     private val _isServerRunning = MutableStateFlow(false)
     val isServerRunning: StateFlow<Boolean> = _isServerRunning.asStateFlow()
 
+    // 本机在局域网中的物理 IPv4 地址
     private val _serverIp = MutableStateFlow("127.0.0.1")
     val serverIp: StateFlow<String> = _serverIp.asStateFlow()
 
+    // 当前已接入服务端的控制端客户端 IP 列表
     private val _connectedClients = MutableStateFlow<List<String>>(emptyList())
     val connectedClients: StateFlow<List<String>> = _connectedClients.asStateFlow()
 
+    // 被控端本地系统与网络交互日志
     private val _serverLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val serverLogs: StateFlow<List<LogEntry>> = _serverLogs.asStateFlow()
 
+    // 服务端(被控端)的屏幕物理真实宽度和高度尺寸
     private val _serverWidth = MutableStateFlow(1080)
     private val _serverHeight = MutableStateFlow(2400)
 
-    // Client (Controller) State
+    // 控制端(客户端)状态：连接、正在连接、未连接
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    // 局域网内通过 UDP 探针寻找到的多路服务端地址集
     private val _discoveredServers = MutableStateFlow<Set<String>>(emptySet())
     val discoveredServers: StateFlow<Set<String>> = _discoveredServers.asStateFlow()
 
+    // 控制端手动输入的远端 IP 地址字段
     private val _manualIpField = MutableStateFlow("")
     val manualIpField: StateFlow<String> = _manualIpField.asStateFlow()
 
+    // 控制端交互行为与流状态控制日志
     private val _controllerLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val controllerLogs: StateFlow<List<LogEntry>> = _controllerLogs.asStateFlow()
 
-    // Indicates if we have received at least one valid video/H264 frame
+    // 标志当前控制端是否接收到了至少一个有效的 H264 视频流编码切片帧
     private val _hasFrameReceived = MutableStateFlow(false)
     val hasFrameReceived: StateFlow<Boolean> = _hasFrameReceived.asStateFlow()
 
-    // Unconflated SharedFlow for the raw H264 video chunks (bytes, flags, presentationTimeUs)
+    // 未合并累积的视频流数据切片热流，提供给悬浮窗底层的 MediaCodec 硬件解码器直接读取
     private val _encodedFrameFlow = MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 128)
     val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> = _encodedFrameFlow.asSharedFlow()
 
-    // Caches the codec-specific configuration frame (SPS/PPS, flags=2) on the client/controller
+    // 在客户端本地缓存最新的 SPS/PPS 编解码配置帧(标志位=2的配置块)，用于解决解码器启动时初始化屏幕信息的问题
     private val _clientCodecConfig = MutableStateFlow<Triple<ByteArray, Int, Long>?>(null)
     val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> = _clientCodecConfig.asStateFlow()
 
+    // 视频流编码对应的自适应缩减宽度像素
     private val _videoWidth = MutableStateFlow(360)
     val videoWidth: StateFlow<Int> = _videoWidth.asStateFlow()
 
+    // 视频流编码对应的自适应缩减高度像素
     private val _videoHeight = MutableStateFlow(640)
     val videoHeight: StateFlow<Int> = _videoHeight.asStateFlow()
 
+    // 同步镜像的物理参考大屏宽度
     private val _mirroredWidth = MutableStateFlow(1080)
     val mirroredWidth: StateFlow<Int> = _mirroredWidth.asStateFlow()
 
+    // 同步镜像的物理参考大屏高度
     private val _mirroredHeight = MutableStateFlow(2400)
     val mirroredHeight: StateFlow<Int> = _mirroredHeight.asStateFlow()
 
@@ -120,7 +131,7 @@ class LanRemoteViewModel : ViewModel() {
         _floatingScaleMultiplier.value = value
     }
 
-    // Network component references
+    // 各大局域网、TCP/UDP套接字核心网络组件和缓存定义
     private var socketServer: SocketServer? = null
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
@@ -129,22 +140,30 @@ class LanRemoteViewModel : ViewModel() {
 
     init {
         instance = this
+        // 默认初始化即开启局域网探针，以便及时嗅探周边的主机节点
         startDiscovery()
     }
 
+    /**
+     * 选择大屏当前所处的工作角色模式（主控端、被控受控端，或者脱机无模式）
+     * @param role 新设定的工作角色 [Role]
+     * @param context 加载上下文，启动或停止底层服务所需
+     */
     fun selectRole(role: Role, context: Context? = null) {
         _currentRole.value = role
         
-        // Clean up previous instances on transition
+        // 在切换角色模式时，首先全量清理及关闭已开启的其他套接字及广播探测接口
         stopServer(context)
         stopDiscovery()
         disconnectFromServer()
 
         when (role) {
             Role.CONTROLLER -> {
+                // 如果是控制端，开启局域网 UDP 嗅探侦听
                 startDiscovery()
             }
             Role.RECEIVER -> {
+                // 如果是被控端，自适应拉起 TCP 端口侦听和局域网 IP 存在广播
                 context?.let { startServer(it) }
             }
             Role.NONE -> {
@@ -154,31 +173,56 @@ class LanRemoteViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 快捷获取格式化好的时分秒当前系统时间戳标记
+     * @return 格式化后的时间字符序列 (HH:mm:ss)
+     */
     private fun getCurrentTimestamp(): String {
         return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
     }
 
+    /**
+     * 向服务端日志队列列表中头插新纪录
+     * @param message 日志消息文本内容
+     * @param type 日志重要等级类型 [LogType]（正常消息/成功通知/警告）
+     */
     fun addServerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
         _serverLogs.value = listOf(entry) + _serverLogs.value
     }
 
+    /**
+     * 向控制端日志队列列表中头插新纪录
+     * @param message 日志消息文本内容
+     * @param type 日志重要等级类型 [LogType]（正常消息/成功通知/警告）
+     */
     fun addControllerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
         _controllerLogs.value = listOf(entry) + _controllerLogs.value
     }
 
+    /**
+     * 清空当前服务端保存的全量交互事件日志
+     */
     fun clearServerLogs() {
         _serverLogs.value = emptyList()
     }
 
+    /**
+     * 清空当前控制端保存的全量交互事件日志
+     */
     fun clearControllerLogs() {
         _controllerLogs.value = emptyList()
     }
 
     // ----------------------------------------------------
-    // SERVER CONTROL LOGIC
+    // 被控端服务端控制管理逻辑 (SERVER CONTROL LOGIC)
     // ----------------------------------------------------
+
+    /**
+     * 开启局域网共控服务端，初始化并启动 TCP 服务和局域网嗅探探测广播
+     * @param context 加载上下文，启动多媒体录屏及辅助服务等需要
+     */
     fun startServer(context: Context) {
         if (_isServerRunning.value) return
 
@@ -186,14 +230,14 @@ class LanRemoteViewModel : ViewModel() {
             val ip = withContext(Dispatchers.IO) { getLocalIpAddress() }
             _serverIp.value = ip
 
-            // Start TCP Server socket
+            // 开启 TCP 套接字监听：对准端口 9292
             socketServer = SocketServer(
                 port = 9292,
                 onClientConnected = { clientIp ->
                     _connectedClients.value = (_connectedClients.value + clientIp).distinct()
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
                     
-                    // Immediately synchronize size specifications (including captured video width/height)
+                    // 新的客户端连接时，立即向其同步当前服务端的坐标尺寸与微缩流画幅大小
                     var captureWidth = (_serverWidth.value * 0.35f).toInt()
                     var captureHeight = (_serverHeight.value * 0.35f).toInt()
                     captureWidth = (captureWidth / 16) * 16
@@ -202,7 +246,7 @@ class LanRemoteViewModel : ViewModel() {
                     if (captureHeight <= 0) captureHeight = 640
                     socketServer?.broadcastMessage("SIZE:${_serverWidth.value},${_serverHeight.value},$captureWidth,$captureHeight")
                     
-                    // Immediately push cached codec config to newly connected client so it can initialize its MediaCodec decoder!
+                    // 立即将本地缓存的最近一次 SPS/PPS 首配置帧灌送给刚连接进来的客户端使其可以立即初始化解码器
                     cachedCodecConfig?.let { configMsg ->
                         socketServer?.broadcastMessage(configMsg)
                     }
@@ -217,7 +261,7 @@ class LanRemoteViewModel : ViewModel() {
             )
             socketServer?.start()
 
-            // Enable discoverability over LAN using UDP broadcasting
+            // 建立局域网 UDP 定时广播器：面向端口 9293
             udpBroadcaster = UdpBroadcaster(serverIp = ip, port = 9293)
             udpBroadcaster?.start()
 
@@ -227,6 +271,10 @@ class LanRemoteViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 优雅而安全地闭合与停止服务端套接字传输、UDP 广播和投屏前台服务
+     * @param context 系统上下文环境，用于停止 ScreenCaptureService 服务
+     */
     fun stopServer(context: Context?) {
         if (!_isServerRunning.value) return
 
@@ -236,12 +284,12 @@ class LanRemoteViewModel : ViewModel() {
         udpBroadcaster?.stop()
         udpBroadcaster = null
 
-        // Stop core recording foreground service
+        // 重置并销毁前台屏幕像素录制采集服务
         context?.let { ctx ->
             try {
                 ctx.stopService(Intent(ctx, ScreenCaptureService::class.java))
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop recording service: ${e.message}")
+                Log.e(TAG, "注销视频采集服务异常: ${e.message}")
             }
         }
 
@@ -251,7 +299,9 @@ class LanRemoteViewModel : ViewModel() {
     }
 
     /**
-     * Set up real dimensions when screen sizes are fetched
+     * 当收到系统的真实屏幕投射渲染回调，确定当前设备物理采集的长宽像素尺寸
+     * @param width 系统屏幕的物理总宽度(像素)
+     * @param height 系统屏幕的物理总高度(像素)
      */
     fun onScreenSizeDetermined(width: Int, height: Int) {
         _serverWidth.value = width
@@ -269,7 +319,10 @@ class LanRemoteViewModel : ViewModel() {
     }
 
     /**
-     * Invoked continuously by ScreenCaptureService to broadcast H.264 video chunks
+     * 由前台 ScreenCaptureService 持续、不断回调输入的最新 H.264 视频流编码碎片包
+     * @param base64Data 数据包的 Base64 压缩编码格式串
+     * @param flags 切片标识 flags (例如 Buffer_Flag_Key_Frame)
+     * @param presentationTimeUs 帧渲染展示绝对时间(微秒)
      */
     fun onEncodedFrameCaptured(base64Data: String, flags: Int, presentationTimeUs: Long) {
         val msg = "H264:$flags:$presentationTimeUs:$base64Data"
@@ -280,7 +333,10 @@ class LanRemoteViewModel : ViewModel() {
     }
 
     /**
-     * Executes back-injected events simulating the client's input actions on the server
+     * 接收并解析控制端传输上来的模拟反控指令
+     * @param context 上下文
+     * @param clientIp 来源端的 IP 地址
+     * @param command 命令参数协议串
      */
     private fun handleReceivedCommand(context: Context, clientIp: String, command: String) {
         when {
@@ -291,7 +347,7 @@ class LanRemoteViewModel : ViewModel() {
                         val rx = coords[0].toFloatOrNull() ?: return
                         val ry = coords[1].toFloatOrNull() ?: return
                         
-                        // Scale percentage values back to real resolution coordinates
+                        // 将相对百分比映射还原为服务端物理屏幕的大屏精确实际点击像素位置
                         val originalX = rx * _serverWidth.value
                         val originalY = ry * _serverHeight.value
 
@@ -303,7 +359,7 @@ class LanRemoteViewModel : ViewModel() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error handling TAP command: ${e.message}")
+                    Log.e(TAG, "解析 TAP 触控命令由于异常崩溃: ${e.message}")
                 }
             }
             command.startsWith("SWIPE:") -> {
@@ -332,7 +388,7 @@ class LanRemoteViewModel : ViewModel() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error handling SWIPE command: ${e.message}")
+                    Log.e(TAG, "解析 SWIPE 滑动命令错误: ${e.message}")
                 }
             }
         }
@@ -340,8 +396,12 @@ class LanRemoteViewModel : ViewModel() {
 
 
     // ----------------------------------------------------
-    // CLIENT (CONTROLLER) LOGIC
+    // 主控端(控制端)客户端逻辑 (CLIENT (CONTROLLER) LOGIC)
     // ----------------------------------------------------
+
+    /**
+     * 开启局域网设备 UDP 探针探测，在后台静默寻找当前在局域网内广播的服务端物理 IP 并且刷洗可选列表
+     */
     fun startDiscovery() {
         _discoveredServers.value = emptySet()
         udpListener?.stop()
@@ -356,21 +416,33 @@ class LanRemoteViewModel : ViewModel() {
         addControllerLog("已开启局域网探针寻找服务端设备...", LogType.INFO)
     }
 
+    /**
+     * 关闭并注销局域网嗅探 UDP 探针
+     */
     fun stopDiscovery() {
         udpListener?.stop()
         udpListener = null
     }
 
+    /**
+     * 手动输入并在状态中保存配对的服务端 IP 地址
+     * @param ip 用户手工键入的 IPv4 字符
+     */
     fun setManualIp(ip: String) {
         _manualIpField.value = ip
     }
 
+    /**
+     * 按下自动扫描到的服务端设备徽章(Chip)直接选定此目标主机
+     * @param ip 被选定并自动填充的目标服务端物理 IP
+     */
     fun selectServer(ip: String) {
         _manualIpField.value = ip
     }
 
     /**
-     * Decodes and displays video stream frames received from the server
+     * 处理连接后各类别来自服务端的网络数据事件流(配置帧、数据帧、大屏分辨率参数)
+     * @param message 从 TCP 接收到的高帧率字节流 Base64 编码或分辨率 SIZE 头部
      */
     fun handleReceivedMessage(message: String) {
         when {
@@ -393,7 +465,7 @@ class LanRemoteViewModel : ViewModel() {
                         _hasFrameReceived.value = true
                     }
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Video compression slice decode trigger error: ${e.message}")
+                    Log.e(TAG, "视频压缩切片接收或还原时由于异常中断: ${e.message}")
                 }
             }
             message.startsWith("SIZE:") -> {
@@ -424,12 +496,16 @@ class LanRemoteViewModel : ViewModel() {
                         _videoHeight.value = vh
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse screen dimensions: ${e.message}")
+                    Log.e(TAG, "解析远端屏幕分辨率同步规格失败: ${e.message}")
                 }
             }
         }
     }
 
+    /**
+     * 连接到用户在输入框或选择列表中指定的 TCP 服务端主机节点
+     * @param context 加载上下文，以便需要时发起悬浮窗独立受控界面的弹窗与授权启动
+     */
     fun connectToSelectedServer(context: Context) {
         val ip = _manualIpField.value.trim()
         if (ip.isEmpty()) {
@@ -462,6 +538,10 @@ class LanRemoteViewModel : ViewModel() {
         socketClient?.connect()
     }
 
+    /**
+     * 反向将当前控制设备对应的坐标手势封装成的控制字符串上报给配对被控机器
+     * @param actionCommand 操作指令协议串 (例如 TAP:0.5,0.4)
+     */
     fun sendClientAction(actionCommand: String) {
         val client = socketClient
         if (client != null && _connectionState.value == ConnectionState.Connected) {
@@ -469,6 +549,9 @@ class LanRemoteViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 主动切断并安全闭合当前的 TCP 主控端网络链路并还原控制状态
+     */
     fun disconnectFromServer() {
         socketClient?.disconnect()
         socketClient = null
@@ -477,6 +560,9 @@ class LanRemoteViewModel : ViewModel() {
         _clientCodecConfig.value = null
     }
 
+    /**
+     * 架构在 ViewModel 生命期闭合、切换或彻底销毁时的全量安全清理，规避端口被长期霸占
+     */
     override fun onCleared() {
         stopServer(null)
         stopDiscovery()
