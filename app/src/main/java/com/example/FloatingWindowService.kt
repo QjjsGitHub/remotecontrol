@@ -53,6 +53,7 @@ import com.example.ui.LanRemoteViewModel
 import com.example.network.ConnectionState
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.lifecycle.lifecycleScope
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -442,9 +443,13 @@ fun VideoSurfaceViewer(
 
     LaunchedEffect(viewModel) {
         viewModel.encodedFrameFlow.collect { frameInfo ->
+            var codec = decoderRef.value
+            while (codec == null) {
+                delay(50)
+                codec = decoderRef.value
+            }
             val bytes = frameInfo.first
             val flags = frameInfo.second
-            val codec = decoderRef.value ?: return@collect
             try {
                 val inputIndex = codec.dequeueInputBuffer(10000)
                 if (inputIndex >= 0) {

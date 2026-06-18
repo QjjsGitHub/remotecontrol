@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.RemoteAccessibilityService
 import com.example.ScreenCaptureService
 import com.example.network.*
+import android.media.MediaCodec
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,6 +121,7 @@ class LanRemoteViewModel : ViewModel() {
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
     private var socketClient: SocketClient? = null
+    private var cachedCodecConfig: String? = null
 
     init {
         instance = this
@@ -186,8 +188,19 @@ class LanRemoteViewModel : ViewModel() {
                     _connectedClients.value = (_connectedClients.value + clientIp).distinct()
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
                     
-                    // Immediately synchronize size specifications
-                    socketServer?.broadcastMessage("SIZE:${_serverWidth.value},${_serverHeight.value}")
+                    // Immediately synchronize size specifications (including captured video width/height)
+                    var captureWidth = (_serverWidth.value * 0.35f).toInt()
+                    var captureHeight = (_serverHeight.value * 0.35f).toInt()
+                    captureWidth = (captureWidth / 16) * 16
+                    captureHeight = (captureHeight / 16) * 16
+                    if (captureWidth <= 0) captureWidth = 360
+                    if (captureHeight <= 0) captureHeight = 640
+                    socketServer?.broadcastMessage("SIZE:${_serverWidth.value},${_serverHeight.value},$captureWidth,$captureHeight")
+                    
+                    // Immediately push cached codec config to newly connected client so it can initialize its MediaCodec decoder!
+                    cachedCodecConfig?.let { configMsg ->
+                        socketServer?.broadcastMessage(configMsg)
+                    }
                 },
                 onClientDisconnected = { clientIp ->
                     _connectedClients.value = _connectedClients.value - clientIp
@@ -254,7 +267,11 @@ class LanRemoteViewModel : ViewModel() {
      * Invoked continuously by ScreenCaptureService to broadcast H.264 video chunks
      */
     fun onEncodedFrameCaptured(base64Data: String, flags: Int) {
-        socketServer?.broadcastMessage("H264:$flags:$base64Data")
+        val msg = "H264:$flags:$base64Data"
+        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            cachedCodecConfig = msg
+        }
+        socketServer?.broadcastMessage(msg)
     }
 
     /**
