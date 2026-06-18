@@ -450,6 +450,7 @@ fun VideoSurfaceViewer(
             }
             val bytes = frameInfo.first
             val flags = frameInfo.second
+            val pts = frameInfo.third
             try {
                 val inputIndex = codec.dequeueInputBuffer(10000)
                 if (inputIndex >= 0) {
@@ -457,7 +458,7 @@ fun VideoSurfaceViewer(
                     if (inputBuffer != null) {
                         inputBuffer.clear()
                         inputBuffer.put(bytes)
-                        codec.queueInputBuffer(inputIndex, 0, bytes.size, System.nanoTime() / 1000, flags)
+                        codec.queueInputBuffer(inputIndex, 0, bytes.size, pts, flags)
                     }
                 }
 
@@ -484,6 +485,24 @@ fun VideoSurfaceViewer(
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
                             decoderRef.value = codec
+
+                            // Immediately queue the cached configuration frame (SPS/PPS) to initialize the decoder parameters
+                            viewModel.clientCodecConfig.value?.let { configFrame ->
+                                try {
+                                    val inputIndex = codec.dequeueInputBuffer(10000)
+                                    if (inputIndex >= 0) {
+                                        val inputBuffer = codec.getInputBuffer(inputIndex)
+                                        if (inputBuffer != null) {
+                                            inputBuffer.clear()
+                                            inputBuffer.put(configFrame.first)
+                                            codec.queueInputBuffer(inputIndex, 0, configFrame.first.size, configFrame.third, configFrame.second)
+                                            Log.d("VideoSurfaceViewer", "Successfully recovered and queued cached config frame of size: ${configFrame.first.size}")
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("VideoSurfaceViewer", "Failed to queue cached config frame on start: ${e.message}")
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.e("VideoSurfaceViewer", "Failed to start AVC decoder: ${e.message}")
                         }

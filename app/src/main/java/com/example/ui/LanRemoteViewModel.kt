@@ -87,9 +87,13 @@ class LanRemoteViewModel : ViewModel() {
     private val _hasFrameReceived = MutableStateFlow(false)
     val hasFrameReceived: StateFlow<Boolean> = _hasFrameReceived.asStateFlow()
 
-    // Unconflated SharedFlow for the raw H264 video chunks
-    private val _encodedFrameFlow = MutableSharedFlow<Pair<ByteArray, Int>>(extraBufferCapacity = 128)
-    val encodedFrameFlow: SharedFlow<Pair<ByteArray, Int>> = _encodedFrameFlow.asSharedFlow()
+    // Unconflated SharedFlow for the raw H264 video chunks (bytes, flags, presentationTimeUs)
+    private val _encodedFrameFlow = MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 128)
+    val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> = _encodedFrameFlow.asSharedFlow()
+
+    // Caches the codec-specific configuration frame (SPS/PPS, flags=2) on the client/controller
+    private val _clientCodecConfig = MutableStateFlow<Triple<ByteArray, Int, Long>?>(null)
+    val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> = _clientCodecConfig.asStateFlow()
 
     private val _videoWidth = MutableStateFlow(360)
     val videoWidth: StateFlow<Int> = _videoWidth.asStateFlow()
@@ -145,6 +149,7 @@ class LanRemoteViewModel : ViewModel() {
             }
             Role.NONE -> {
                 _hasFrameReceived.value = false
+                _clientCodecConfig.value = null
             }
         }
     }
@@ -266,8 +271,8 @@ class LanRemoteViewModel : ViewModel() {
     /**
      * Invoked continuously by ScreenCaptureService to broadcast H.264 video chunks
      */
-    fun onEncodedFrameCaptured(base64Data: String, flags: Int) {
-        val msg = "H264:$flags:$base64Data"
+    fun onEncodedFrameCaptured(base64Data: String, flags: Int, presentationTimeUs: Long) {
+        val msg = "H264:$flags:$presentationTimeUs:$base64Data"
         if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
             cachedCodecConfig = msg
         }
@@ -372,13 +377,19 @@ class LanRemoteViewModel : ViewModel() {
             message.startsWith("H264:") -> {
                 try {
                     val remainder = message.substringAfter("H264:")
-                    val colonIndex = remainder.indexOf(':')
-                    if (colonIndex != -1) {
-                        val flagsStr = remainder.substring(0, colonIndex)
-                        val base64Bytes = remainder.substring(colonIndex + 1)
-                        val flags = flagsStr.toIntOrNull() ?: 0
+                    val parts = remainder.split(":", limit = 3)
+                    if (parts.size >= 2) {
+                        val flags = parts[0].toIntOrNull() ?: 0
+                        val presentationTimeUs = if (parts.size >= 3) (parts[1].toLongOrNull() ?: 0L) else 0L
+                        val base64Bytes = if (parts.size >= 3) parts[2] else parts[1]
                         val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
-                        _encodedFrameFlow.tryEmit(Pair(bytes, flags))
+                        
+                        val frameTriple = Triple(bytes, flags, presentationTimeUs)
+                        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                            _clientCodecConfig.value = frameTriple
+                        }
+                        
+                        _encodedFrameFlow.tryEmit(frameTriple)
                         _hasFrameReceived.value = true
                     }
                 } catch (e: Throwable) {
@@ -463,6 +474,7 @@ class LanRemoteViewModel : ViewModel() {
         socketClient = null
         _connectionState.value = ConnectionState.Disconnected
         _hasFrameReceived.value = false
+        _clientCodecConfig.value = null
     }
 
     override fun onCleared() {

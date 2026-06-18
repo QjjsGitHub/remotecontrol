@@ -233,7 +233,7 @@ class ScreenCaptureService : Service() {
                             
                             val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
                             val flags = bufferInfo.flags
-                            vm?.onEncodedFrameCaptured(base64Data, flags)
+                            vm?.onEncodedFrameCaptured(base64Data, flags, bufferInfo.presentationTimeUs)
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
