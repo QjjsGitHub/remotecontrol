@@ -16,6 +16,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -79,9 +82,19 @@ class LanRemoteViewModel : ViewModel() {
     private val _controllerLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val controllerLogs: StateFlow<List<LogEntry>> = _controllerLogs.asStateFlow()
 
-    // Encoded H264 video frame chunks (Pair of raw packet bytes and MediaCodec flags)
-    private val _encodedFrame = MutableStateFlow<Pair<ByteArray, Int>?>(null)
-    val encodedFrame: StateFlow<Pair<ByteArray, Int>?> = _encodedFrame.asStateFlow()
+    // Indicates if we have received at least one valid video/H264 frame
+    private val _hasFrameReceived = MutableStateFlow(false)
+    val hasFrameReceived: StateFlow<Boolean> = _hasFrameReceived.asStateFlow()
+
+    // Unconflated SharedFlow for the raw H264 video chunks
+    private val _encodedFrameFlow = MutableSharedFlow<Pair<ByteArray, Int>>(extraBufferCapacity = 128)
+    val encodedFrameFlow: SharedFlow<Pair<ByteArray, Int>> = _encodedFrameFlow.asSharedFlow()
+
+    private val _videoWidth = MutableStateFlow(360)
+    val videoWidth: StateFlow<Int> = _videoWidth.asStateFlow()
+
+    private val _videoHeight = MutableStateFlow(640)
+    val videoHeight: StateFlow<Int> = _videoHeight.asStateFlow()
 
     private val _mirroredWidth = MutableStateFlow(1080)
     val mirroredWidth: StateFlow<Int> = _mirroredWidth.asStateFlow()
@@ -129,7 +142,7 @@ class LanRemoteViewModel : ViewModel() {
                 context?.let { startServer(it) }
             }
             Role.NONE -> {
-                _encodedFrame.value = null
+                _hasFrameReceived.value = false
             }
         }
     }
@@ -225,8 +238,16 @@ class LanRemoteViewModel : ViewModel() {
     fun onScreenSizeDetermined(width: Int, height: Int) {
         _serverWidth.value = width
         _serverHeight.value = height
-        addServerLog("本机录屏分辨率初始化完成: ${width}x${height}", LogType.INFO)
-        socketServer?.broadcastMessage("SIZE:$width,$height")
+        
+        var captureWidth = (width * 0.35f).toInt()
+        var captureHeight = (height * 0.35f).toInt()
+        captureWidth = (captureWidth / 16) * 16
+        captureHeight = (captureHeight / 16) * 16
+        if (captureWidth <= 0) captureWidth = 360
+        if (captureHeight <= 0) captureHeight = 640
+        
+        addServerLog("本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight})", LogType.INFO)
+        socketServer?.broadcastMessage("SIZE:$width,$height,$captureWidth,$captureHeight")
     }
 
     /**
@@ -340,7 +361,8 @@ class LanRemoteViewModel : ViewModel() {
                         val base64Bytes = remainder.substring(colonIndex + 1)
                         val flags = flagsStr.toIntOrNull() ?: 0
                         val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
-                        _encodedFrame.value = Pair(bytes, flags)
+                        _encodedFrameFlow.tryEmit(Pair(bytes, flags))
+                        _hasFrameReceived.value = true
                     }
                 } catch (e: Throwable) {
                     Log.e(TAG, "Video compression slice decode trigger error: ${e.message}")
@@ -349,12 +371,29 @@ class LanRemoteViewModel : ViewModel() {
             message.startsWith("SIZE:") -> {
                 try {
                     val sizes = message.substringAfter("SIZE:").split(",")
-                    if (sizes.size == 2) {
+                    if (sizes.size >= 2) {
                         val w = sizes[0].toIntOrNull() ?: 1080
                         val h = sizes[1].toIntOrNull() ?: 2400
                         _mirroredWidth.value = w
                         _mirroredHeight.value = h
                         addControllerLog("更新远端显示分辨率匹配: ${w}x${h}", LogType.INFO)
+                    }
+                    if (sizes.size >= 4) {
+                        val vw = sizes[2].toIntOrNull() ?: 360
+                        val vh = sizes[3].toIntOrNull() ?: 640
+                        _videoWidth.value = vw
+                        _videoHeight.value = vh
+                    } else if (sizes.size == 2) {
+                        val w = sizes[0].toIntOrNull() ?: 1080
+                        val h = sizes[1].toIntOrNull() ?: 2400
+                        var vw = (w * 0.35f).toInt()
+                        var vh = (h * 0.35f).toInt()
+                        vw = (vw / 16) * 16
+                        vh = (vh / 16) * 16
+                        if (vw <= 0) vw = 360
+                        if (vh <= 0) vh = 640
+                        _videoWidth.value = vw
+                        _videoHeight.value = vh
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse screen dimensions: ${e.message}")
@@ -383,7 +422,7 @@ class LanRemoteViewModel : ViewModel() {
                     }
                     ConnectionState.Disconnected -> {
                         addControllerLog("服务端已被断开", LogType.WARNING)
-                        _encodedFrame.value = null
+                        _hasFrameReceived.value = false
                     }
                     else -> {}
                 }
@@ -406,7 +445,7 @@ class LanRemoteViewModel : ViewModel() {
         socketClient?.disconnect()
         socketClient = null
         _connectionState.value = ConnectionState.Disconnected
-        _encodedFrame.value = null
+        _hasFrameReceived.value = false
     }
 
     override fun onCleared() {

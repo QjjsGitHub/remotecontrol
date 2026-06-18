@@ -166,7 +166,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         composeView.setContent {
             val viewModel = LanRemoteViewModel.instance
             if (viewModel != null) {
-                val encodedFrame by viewModel.encodedFrame.collectAsState()
+                val hasFrameReceived by viewModel.hasFrameReceived.collectAsState()
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
@@ -278,7 +278,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 .fillMaxWidth(),
                             contentAlignment = Alignment.Center
                         ) {
-                            val hasFrame = encodedFrame != null
+                            val hasFrame = hasFrameReceived
                             if (hasFrame) {
                                 var localViewW by remember { mutableStateOf(1) }
                                 var localViewH by remember { mutableStateOf(1) }
@@ -436,33 +436,35 @@ fun VideoSurfaceViewer(
     viewModel: LanRemoteViewModel,
     modifier: Modifier = Modifier
 ) {
-    val encodedFrame by viewModel.encodedFrame.collectAsState()
+    val videoWidth by viewModel.videoWidth.collectAsState()
+    val videoHeight by viewModel.videoHeight.collectAsState()
     val decoderRef = remember { Ref<MediaCodec>() }
 
-    LaunchedEffect(encodedFrame) {
-        val frameInfo = encodedFrame ?: return@LaunchedEffect
-        val bytes = frameInfo.first
-        val flags = frameInfo.second
-        val codec = decoderRef.value ?: return@LaunchedEffect
-        try {
-            val inputIndex = codec.dequeueInputBuffer(10000)
-            if (inputIndex >= 0) {
-                val inputBuffer = codec.getInputBuffer(inputIndex)
-                if (inputBuffer != null) {
-                    inputBuffer.clear()
-                    inputBuffer.put(bytes)
-                    codec.queueInputBuffer(inputIndex, 0, bytes.size, System.nanoTime() / 1000, flags)
+    LaunchedEffect(viewModel) {
+        viewModel.encodedFrameFlow.collect { frameInfo ->
+            val bytes = frameInfo.first
+            val flags = frameInfo.second
+            val codec = decoderRef.value ?: return@collect
+            try {
+                val inputIndex = codec.dequeueInputBuffer(10000)
+                if (inputIndex >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputIndex)
+                    if (inputBuffer != null) {
+                        inputBuffer.clear()
+                        inputBuffer.put(bytes)
+                        codec.queueInputBuffer(inputIndex, 0, bytes.size, System.nanoTime() / 1000, flags)
+                    }
                 }
-            }
 
-            val bufferInfo = MediaCodec.BufferInfo()
-            var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-            while (outputIndex >= 0) {
-                codec.releaseOutputBuffer(outputIndex, true)
-                outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                val bufferInfo = MediaCodec.BufferInfo()
+                var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                while (outputIndex >= 0) {
+                    codec.releaseOutputBuffer(outputIndex, true)
+                    outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                }
+            } catch (e: Exception) {
+                Log.e("VideoSurfaceViewer", "Subsurface slice decode error: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e("VideoSurfaceViewer", "Subsurface slice decode error: ${e.message}")
         }
     }
 
@@ -473,7 +475,7 @@ fun VideoSurfaceViewer(
                     override fun surfaceCreated(holder: SurfaceHolder) {
                         try {
                             val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 720, 1280)
+                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
                             decoderRef.value = codec

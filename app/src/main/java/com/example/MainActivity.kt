@@ -138,7 +138,7 @@ fun SimplifiedDashboardScreen(
     val discoveredServers by viewModel.discoveredServers.collectAsState()
     val controllerLogs by viewModel.controllerLogs.collectAsState()
 
-    val encodedFrame by viewModel.encodedFrame.collectAsState()
+    val hasFrameReceived by viewModel.hasFrameReceived.collectAsState()
     val mirroredWidth by viewModel.mirroredWidth.collectAsState()
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
@@ -558,7 +558,7 @@ fun SimplifiedDashboardScreen(
                         }
 
                         // 悬浮窗高级参数配置子面板 (仅在建立连接并成功接收捕获帧时显示)
-                        if (connectionState == ConnectionState.Connected && encodedFrame != null) {
+                        if (connectionState == ConnectionState.Connected && hasFrameReceived) {
                             Spacer(modifier = Modifier.height(12.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                             Spacer(modifier = Modifier.height(12.dp))
