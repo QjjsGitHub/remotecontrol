@@ -79,9 +79,9 @@ class LanRemoteViewModel : ViewModel() {
     private val _controllerLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val controllerLogs: StateFlow<List<LogEntry>> = _controllerLogs.asStateFlow()
 
-    // Mirrored screen frame displayed on Client
-    private val _mirroredBitmap = MutableStateFlow<Bitmap?>(null)
-    val mirroredBitmap: StateFlow<Bitmap?> = _mirroredBitmap.asStateFlow()
+    // Encoded H264 video frame chunks (Pair of raw packet bytes and MediaCodec flags)
+    private val _encodedFrame = MutableStateFlow<Pair<ByteArray, Int>?>(null)
+    val encodedFrame: StateFlow<Pair<ByteArray, Int>?> = _encodedFrame.asStateFlow()
 
     private val _mirroredWidth = MutableStateFlow(1080)
     val mirroredWidth: StateFlow<Int> = _mirroredWidth.asStateFlow()
@@ -129,7 +129,7 @@ class LanRemoteViewModel : ViewModel() {
                 context?.let { startServer(it) }
             }
             Role.NONE -> {
-                _mirroredBitmap.value = null
+                _encodedFrame.value = null
             }
         }
     }
@@ -230,10 +230,10 @@ class LanRemoteViewModel : ViewModel() {
     }
 
     /**
-     * Invoked continuously by ScreenCaptureService to encode and broadcast frames
+     * Invoked continuously by ScreenCaptureService to broadcast H.264 video chunks
      */
-    fun onFrameCaptured(base64Image: String, width: Int, height: Int) {
-        socketServer?.broadcastMessage("FRAME:$base64Image")
+    fun onEncodedFrameCaptured(base64Data: String, flags: Int) {
+        socketServer?.broadcastMessage("H264:$flags:$base64Data")
     }
 
     /**
@@ -327,20 +327,23 @@ class LanRemoteViewModel : ViewModel() {
     }
 
     /**
-     * Decodes and displays screenshot stream updates received from the server
+     * Decodes and displays video stream frames received from the server
      */
     fun handleReceivedMessage(message: String) {
         when {
-            message.startsWith("FRAME:") -> {
+            message.startsWith("H264:") -> {
                 try {
-                    val base64Bytes = message.substringAfter("FRAME:")
-                    val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    if (bitmap != null) {
-                        _mirroredBitmap.value = bitmap
+                    val remainder = message.substringAfter("H264:")
+                    val colonIndex = remainder.indexOf(':')
+                    if (colonIndex != -1) {
+                        val flagsStr = remainder.substring(0, colonIndex)
+                        val base64Bytes = remainder.substring(colonIndex + 1)
+                        val flags = flagsStr.toIntOrNull() ?: 0
+                        val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
+                        _encodedFrame.value = Pair(bytes, flags)
                     }
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Bitmap stream decode exception: ${e.message}")
+                    Log.e(TAG, "Video compression slice decode trigger error: ${e.message}")
                 }
             }
             message.startsWith("SIZE:") -> {
@@ -380,7 +383,7 @@ class LanRemoteViewModel : ViewModel() {
                     }
                     ConnectionState.Disconnected -> {
                         addControllerLog("服务端已被断开", LogType.WARNING)
-                        _mirroredBitmap.value = null
+                        _encodedFrame.value = null
                     }
                     else -> {}
                 }
@@ -403,7 +406,7 @@ class LanRemoteViewModel : ViewModel() {
         socketClient?.disconnect()
         socketClient = null
         _connectionState.value = ConnectionState.Disconnected
-        _mirroredBitmap.value = null
+        _encodedFrame.value = null
     }
 
     override fun onCleared() {

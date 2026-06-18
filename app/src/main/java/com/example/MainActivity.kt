@@ -138,7 +138,7 @@ fun SimplifiedDashboardScreen(
     val discoveredServers by viewModel.discoveredServers.collectAsState()
     val controllerLogs by viewModel.controllerLogs.collectAsState()
 
-    val mirroredBitmap by viewModel.mirroredBitmap.collectAsState()
+    val encodedFrame by viewModel.encodedFrame.collectAsState()
     val mirroredWidth by viewModel.mirroredWidth.collectAsState()
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
@@ -183,12 +183,11 @@ fun SimplifiedDashboardScreen(
         }
     }
 
-    // 坐标与拖拽状态变量
-    var floatX by remember { mutableStateOf(100f) }
-    var floatY by remember { mutableStateOf(400f) }
-    
     // 订阅全局悬浮窗的比例系数 (直接与 ViewModel 的状态进行双向订阅绑定，与后台悬浮窗保持完美同步)
     val scaleMultiplier by viewModel.floatingScaleMultiplier.collectAsState()
+
+    // 订阅全局屏幕捕捉前台服务的活动状态 (实时更新指示灯与开关)
+    val isScreenCaptureRunning by ScreenCaptureService.isServiceRunning.collectAsState()
 
     Scaffold(
         modifier = Modifier
@@ -298,14 +297,14 @@ fun SimplifiedDashboardScreen(
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
 
-                        // Server Toggler Master Button
+                        // 本地共享服务端主开关按钮
                         Button(
                             onClick = {
                                 if (isServerRunning) {
                                     viewModel.stopServer(context)
                                 } else {
                                     viewModel.startServer(context)
-                                    if (!com.example.ScreenCaptureService.isRunning) {
+                                    if (!isScreenCaptureRunning) {
                                         onRequestScreenShare()
                                     }
                                 }
@@ -355,7 +354,7 @@ fun SimplifiedDashboardScreen(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Sub-feature: Screen Projector Recorder Toggler
+                            // 子功能：后台截屏投屏直播服务控制卡片
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -363,20 +362,20 @@ fun SimplifiedDashboardScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
-                                        .background(if (ScreenCaptureService.isRunning) Color(0xFF4CAF50) else Color.Red, CircleShape)
+                                        .background(if (isScreenCaptureRunning) Color(0xFF4CAF50) else Color.Red, CircleShape)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("后台截屏直播服务", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                                     Text(
-                                        text = if (ScreenCaptureService.isRunning) "捕获引擎就绪，投屏广播中" else "需要启动媒体录屏授权",
+                                        text = if (isScreenCaptureRunning) "捕获引擎就绪，投屏广播中" else "需要启动媒体录屏授权",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Button(
                                     onClick = {
-                                        if (ScreenCaptureService.isRunning) {
+                                        if (isScreenCaptureRunning) {
                                             context.stopService(Intent(context, ScreenCaptureService::class.java))
                                             viewModel.addServerLog("主动停止了屏幕捕捉进程", com.example.ui.LogType.WARNING)
                                         } else {
@@ -384,12 +383,12 @@ fun SimplifiedDashboardScreen(
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (ScreenCaptureService.isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                                        containerColor = if (isScreenCaptureRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
                                     ),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                     modifier = Modifier.height(36.dp)
                                 ) {
-                                    Text(if (ScreenCaptureService.isRunning) "停投" else "启投", fontSize = 12.sp)
+                                    Text(if (isScreenCaptureRunning) "停投" else "启投", fontSize = 12.sp)
                                 }
                             }
 
@@ -559,7 +558,7 @@ fun SimplifiedDashboardScreen(
                         }
 
                         // 悬浮窗高级参数配置子面板 (仅在建立连接并成功接收捕获帧时显示)
-                        if (connectionState == ConnectionState.Connected && mirroredBitmap != null) {
+                        if (connectionState == ConnectionState.Connected && encodedFrame != null) {
                             Spacer(modifier = Modifier.height(12.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                             Spacer(modifier = Modifier.height(12.dp))
@@ -766,138 +765,7 @@ fun SimplifiedDashboardScreen(
             }
 
             // ------------------ INTERACTIVE FLOATING PICTURE-IN-PICTURE (PIP) SCREEN MIRROR OVERLAY ------------------
-            // Disabled in-app screen mirror to use background floating window exclusively as user requested
-            val activeBitmap = mirroredBitmap
-            if (false && connectionState == ConnectionState.Connected) {
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(floatX.roundToInt(), floatY.roundToInt()) }
-                        .width((mirroredWidth * scaleMultiplier).dp)
-                        .height(((mirroredHeight * scaleMultiplier) + 36).dp) // +36dp for header
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp))
-                        .background(Color.Black)
-                        .testTag("floating_mirror_pip")
-                ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // Title header bar (Double drag gesture target)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(36.dp)
-                                .background(MaterialTheme.colorScheme.primary)
-                                .pointerInput(Unit) {
-                                    detectDragGestures { change, dragAmount ->
-                                        change.consume()
-                                        floatX += dragAmount.x
-                                        floatY += dragAmount.y
-                                    }
-                                }
-                                .padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Menu, contentDescription = "Drag Window", tint = Color.White, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("远端流式画面", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                            Text("点击即可反控 🔗", color = Color.White.copy(alpha = 0.85f), fontSize = 9.sp, fontWeight = FontWeight.Medium)
-                        }
-
-                        // Live Canvas Frame with Action Event Handlers
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (activeBitmap != null) {
-                                var localFrameW by remember { mutableStateOf(1) }
-                                var localFrameH by remember { mutableStateOf(1) }
-
-                                Image(
-                                    bitmap = activeBitmap.asImageBitmap(),
-                                    contentDescription = "Active live frame stream from server",
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .onSizeChanged { size ->
-                                            localFrameW = size.width
-                                            localFrameH = size.height
-                                        }
-                                        .pointerInput(localFrameW, localFrameH) {
-                                            detectTapGestures(
-                                                onTap = { offset ->
-                                                    if (localFrameW > 0 && localFrameH > 0) {
-                                                        val rx = offset.x / localFrameW
-                                                        val ry = offset.y / localFrameH
-                                                        viewModel.sendClientAction("TAP:$rx,$ry")
-                                                    }
-                                                }
-                                            )
-                                        }
-                                        .pointerInput(localFrameW, localFrameH) {
-                                            var dragStartX = 0f
-                                            var dragStartY = 0f
-                                            detectDragGestures(
-                                                onDragStart = { offset ->
-                                                    dragStartX = offset.x
-                                                    dragStartY = offset.y
-                                                },
-                                                onDragEnd = {},
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    val currentX = change.position.x
-                                                    val currentY = change.position.y
-                                                    if (localFrameW > 0 && localFrameH > 0) {
-                                                        val distSq = (currentX - dragStartX) * (currentX - dragStartX) + (currentY - dragStartY) * (currentY - dragStartY)
-                                                        if (distSq > 400) { // Mapping swipe action
-                                                            val rsx = dragStartX / localFrameW
-                                                            val rsy = dragStartY / localFrameH
-                                                            val rex = currentX / localFrameW
-                                                            val rey = currentY / localFrameH
-                                                            viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
-                                                            
-                                                            // continuous loop
-                                                            dragStartX = currentX
-                                                            dragStartY = currentY
-                                                        }
-                                                    }
-                                                }
-                                            )
-                                        },
-                                    contentScale = ContentScale.Fit
-                                )
-                            } else {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                    modifier = Modifier.padding(16.dp)
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text(
-                                        "连接成功 🔗",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        "等待服务端开启录屏...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.White.copy(alpha = 0.7f),
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Disabled inside App floating window preview as it is deprecated to use background overlay service exclusively
         }
     }
 }

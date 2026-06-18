@@ -54,6 +54,12 @@ import com.example.network.ConnectionState
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
+import android.media.MediaCodec
+import android.media.MediaFormat
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.node.Ref
 
 /**
  * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
@@ -160,7 +166,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         composeView.setContent {
             val viewModel = LanRemoteViewModel.instance
             if (viewModel != null) {
-                val mirroredBitmap by viewModel.mirroredBitmap.collectAsState()
+                val encodedFrame by viewModel.encodedFrame.collectAsState()
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
@@ -272,8 +278,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 .fillMaxWidth(),
                             contentAlignment = Alignment.Center
                         ) {
-                            val activeBitmap = mirroredBitmap
-                            if (activeBitmap != null) {
+                            val hasFrame = encodedFrame != null
+                            if (hasFrame) {
                                 var localViewW by remember { mutableStateOf(1) }
                                 var localViewH by remember { mutableStateOf(1) }
 
@@ -290,9 +296,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                             }
                                         }
                                 ) {
-                                    Image(
-                                        bitmap = activeBitmap.asImageBitmap(),
-                                        contentDescription = "Background live screen stream",
+                                    VideoSurfaceViewer(
+                                        viewModel = viewModel,
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .onSizeChanged { size ->
@@ -424,4 +429,73 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         super.onDestroy()
     }
+}
+
+@Composable
+fun VideoSurfaceViewer(
+    viewModel: LanRemoteViewModel,
+    modifier: Modifier = Modifier
+) {
+    val encodedFrame by viewModel.encodedFrame.collectAsState()
+    val decoderRef = remember { Ref<MediaCodec>() }
+
+    LaunchedEffect(encodedFrame) {
+        val frameInfo = encodedFrame ?: return@LaunchedEffect
+        val bytes = frameInfo.first
+        val flags = frameInfo.second
+        val codec = decoderRef.value ?: return@LaunchedEffect
+        try {
+            val inputIndex = codec.dequeueInputBuffer(10000)
+            if (inputIndex >= 0) {
+                val inputBuffer = codec.getInputBuffer(inputIndex)
+                if (inputBuffer != null) {
+                    inputBuffer.clear()
+                    inputBuffer.put(bytes)
+                    codec.queueInputBuffer(inputIndex, 0, bytes.size, System.nanoTime() / 1000, flags)
+                }
+            }
+
+            val bufferInfo = MediaCodec.BufferInfo()
+            var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+            while (outputIndex >= 0) {
+                codec.releaseOutputBuffer(outputIndex, true)
+                outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+            }
+        } catch (e: Exception) {
+            Log.e("VideoSurfaceViewer", "Subsurface slice decode error: ${e.message}")
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            SurfaceView(ctx).apply {
+                holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        try {
+                            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 720, 1280)
+                            codec.configure(format, holder.surface, null, 0)
+                            codec.start()
+                            decoderRef.value = codec
+                        } catch (e: Exception) {
+                            Log.e("VideoSurfaceViewer", "Failed to start AVC decoder: ${e.message}")
+                        }
+                    }
+
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        try {
+                            decoderRef.value?.stop()
+                            decoderRef.value?.release()
+                        } catch (e: Exception) {
+                            Log.e("VideoSurfaceViewer", "Relinquish decoder failure: ${e.message}")
+                        }
+                        decoderRef.value = null
+                    }
+                })
+            }
+        },
+        modifier = modifier
+    )
 }

@@ -23,7 +23,13 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.example.ui.LanRemoteViewModel
-import java.io.ByteArrayOutputStream
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.view.Surface
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 屏幕捕获与画面广播的前台服务 (ScreenCaptureService)
@@ -36,36 +42,43 @@ class ScreenCaptureService : Service() {
         private const val CHANNEL_ID = "ScreenCaptureChannel"
         private const val NOTIFICATION_ID = 8821
         
+        // 使用 StateFlow 实现运行状态的响应式暴露，这样可以在 Jetpack Compose UI 中完美响应
+        private val _isServiceRunning = MutableStateFlow(false)
+        val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
+        
         /**
          * 记录后台流式屏幕截取服务是否正在运行的全局标识
          */
-        var isRunning = false
-            private set
+        val isRunning: Boolean
+            get() = _isServiceRunning.value
+
+        /**
+         * 更新服务运行状态，能够保证 UI 框架立刻感知到变化
+         */
+        fun updateRunningState(running: Boolean) {
+            _isServiceRunning.value = running
+        }
     }
 
     // 系统多媒体投影管理器 (用于请求和管理屏幕录制)
     private var mediaProjectionManager: MediaProjectionManager? = null
     // 媒体投影连接会话
     private var mediaProjection: MediaProjection? = null
-    // 系统虚拟显示器 (将屏幕物理像素投影到我们自定义的 ImageReader 表面上)
+    // 系统虚拟显示器 (将屏幕物理像素投影到我们自定义的编码器 Surface 上)
     private var virtualDisplay: VirtualDisplay? = null
-    // 原始图像读取器，负责监听和解析屏幕上变动的像素帧
-    private var imageReader: ImageReader? = null
     
-    // 自定义图像后处理专用的 HandlerThread (完全在后台运行，防止解析图片或压缩 Base64 时卡住 UI 主线程)
-    private var backgroundThread: android.os.HandlerThread? = null
-    private var backgroundHandler: Handler? = null
-    // 记录上一帧抓取和分发的时间戳，用于节约网络带宽
-    private var lastFrameTime = 0L
-    // 每帧抓取的最小间隔时间(250毫秒约秒级4帧，网络耗损低，表现最稳定)
-    private val frameRateMs = 250L 
+    // MediaCodec 硬件 AVC/H264 编码器
+    private var mediaCodec: MediaCodec? = null
+    private var codecSurface: Surface? = null
+    private var codecThread: Thread? = null
+    private var isEncoding = false
 
     /**
      * 服务初始化生命周期
      */
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
+        updateRunningState(true)
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
     }
 
@@ -76,7 +89,7 @@ class ScreenCaptureService : Service() {
         createNotificationChannel()
         val notification = createNotification()
         
-        // 在 Android Q 及以上版本，前台服务必须明确声明 mediaProjection 类型，否则会导致崩溃或启动失败
+        // 在 Android Q 及以上版本，前台服务必须明确声明 mediaProjection TYPE，否则会导致崩溃或启动失败
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
@@ -136,6 +149,7 @@ class ScreenCaptureService : Service() {
     private fun setupScreenCapture() {
         val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(metrics)
         val width = metrics.widthPixels
         val height = metrics.heightPixels
@@ -144,12 +158,31 @@ class ScreenCaptureService : Service() {
         // 反馈给 ViewModel 系统端确切的物理宽度与高度
         LanRemoteViewModel.instance?.onScreenSizeDetermined(width, height)
 
-        // 为了极大节约移动端局域网的网络传输带宽开销，将采集宽高整体降级为正常宽高的 0.35 倍
-        val captureWidth = (width * 0.35f).toInt()
-        val captureHeight = (height * 0.35f).toInt()
+        // 为了极大节约移动端局域网的网络传输带宽开销，将采集宽高整体降级为正常宽高的 0.35 倍，且对齐到 16 字节
+        var captureWidth = (width * 0.35f).toInt()
+        var captureHeight = (height * 0.35f).toInt()
+        captureWidth = (captureWidth / 16) * 16
+        captureHeight = (captureHeight / 16) * 16
+        if (captureWidth <= 0) captureWidth = 360
+        if (captureHeight <= 0) captureHeight = 640
 
-        // 实例化一个双重缓冲队列图像读取器 (Format: RGBA_8888, Buffer count: 2)
-        imageReader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+        try {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, captureWidth, captureHeight)
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000) // 2 Mbps
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30) // 30 FPS
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 second I-Frame
+
+            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codecSurface = codec.createInputSurface()
+            mediaCodec = codec
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create MediaCodec encoder: ${e.message}")
+            LanRemoteViewModel.instance?.addServerLog("初始化视频编码器失败: ${e.message}", com.example.ui.LogType.WARNING)
+            stopSelf()
+            return
+        }
         
         // 注册多媒体投影会话生命周期监听拦截回调 (在 Android 14+ 下极为关键，必须注册此监听方可启动渲染采集)
         mediaProjection?.registerCallback(object : MediaProjection.Callback() {
@@ -159,106 +192,56 @@ class ScreenCaptureService : Service() {
             }
         }, Handler(Looper.getMainLooper()))
 
-        // 建立虚拟显示层，连结屏幕和自定义 ImageReader Surface 端口
+        // 建立虚拟显示层，连结屏幕和 MediaCodec Input Surface 端口，零拷贝，CPU 几乎零开销
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
             captureWidth,
             captureHeight,
             density,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
+            codecSurface,
             null,
             null
         )
 
-        // 开启独立的后台循环，让所有的图片解析、缓存剪裁剪裁、压缩等全流程都在本后台非阻塞线程进行
-        backgroundThread = android.os.HandlerThread("ScreenCaptureBackground").apply { start() }
-        backgroundHandler = Handler(backgroundThread!!.looper)
+        // 启动硬件流编码
+        mediaCodec?.start()
+        isEncoding = true
+        startEncodingLoop()
 
-        // 绑定图像监听回调至后台处理器
-        imageReader?.setOnImageAvailableListener({ reader ->
-            val now = System.currentTimeMillis()
-            // 如果满足间隔限制(帧率卡控)，开始捕获解析并进行广播
-            if (now - lastFrameTime >= frameRateMs) {
-                lastFrameTime = now
-                acquireAndBroadcastFrame(captureWidth, captureHeight)
-            } else {
-                // 否则立刻丢弃最新变动的无效缓存帧，保障 ImageReader 渲染管道没有任何物理滞后挤压
-                var img: android.media.Image? = null
-                try {
-                    img = reader.acquireLatestImage()
-                } catch (ignored: Exception) {
-                } finally {
-                    img?.close()
-                }
-            }
-        }, backgroundHandler)
-
-        LanRemoteViewModel.instance?.addServerLog("投屏引擎并后台采集开启成功", com.example.ui.LogType.SUCCESS)
+        LanRemoteViewModel.instance?.addServerLog("投屏引擎并硬件视频编码开启成功", com.example.ui.LogType.SUCCESS)
     }
 
     /**
-     * 提取当前 Surface 产生的图像帧，整理格式并将其转换为精简的 Base64 广播包
+     * 轮询拉取 MediaCodec 编码好的视频流帧，将其并转换打包通过 Socket 底层网络分发
      */
-    private fun acquireAndBroadcastFrame(width: Int, height: Int) {
-        val reader = imageReader ?: return
-        val vm = LanRemoteViewModel.instance ?: return
-
-        var image: android.media.Image? = null
-        try {
-            image = reader.acquireLatestImage() ?: return
-            val planes = image.planes
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            // 如果行跨度对齐补全含有空闲像素，需要计算行边距差
-            val rowPadding = rowStride - pixelStride * width
-
-            // 基于物理像素字节读取生成 ARGB_8888 结构化位图
-            val bitmap = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
-            )
-            bitmap.copyPixelsFromBuffer(buffer)
-
-            // 如果对齐机制导致了产生右侧空白边距，我们进行裁剪，只剔除多余的黑框部分
-            val cleanBitmap = if (rowPadding > 0) {
+    private fun startEncodingLoop() {
+        codecThread = Thread {
+            val bufferInfo = MediaCodec.BufferInfo()
+            val vm = LanRemoteViewModel.instance
+            while (isEncoding) {
                 try {
-                    val cropped = Bitmap.createBitmap(bitmap, 0, 0, width, height)
-                    bitmap.recycle() // 及时回收中转的大内存未对齐位图
-                    cropped
+                    val codec = mediaCodec ?: break
+                    val outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                    if (outputBufferIndex >= 0) {
+                        val outputBuffer = codec.getOutputBuffer(outputBufferIndex)
+                        if (outputBuffer != null && bufferInfo.size > 0) {
+                            outputBuffer.position(bufferInfo.offset)
+                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                            val outData = ByteArray(bufferInfo.size)
+                            outputBuffer.get(outData)
+                            
+                            val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
+                            val flags = bufferInfo.flags
+                            vm?.onEncodedFrameCaptured(base64Data, flags)
+                        }
+                        codec.releaseOutputBuffer(outputBufferIndex, false)
+                    }
                 } catch (e: Exception) {
-                    bitmap
+                    Log.d(TAG, "Encoding loop interval packet: ${e.message}")
                 }
-            } else {
-                bitmap
             }
-
-            // 对规范化裁剪后的纯净位图进行 JPEG 图像超高比例有损压缩 (质量45，兼顾色彩的同时实现大小极小)
-            val stream = ByteArrayOutputStream()
-            cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 45, stream)
-            val bytes = stream.toByteArray()
-            
-            // 手动回收使用完的位图碎片，确保不发生内存抖动或长久积累后的 OOM
-            if (cleanBitmap != bitmap) {
-                cleanBitmap.recycle()
-            } else {
-                bitmap.recycle()
-            }
-            
-            // 无换行的高性能 Base64 编码
-            val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            
-            // 提交至 ViewModel 将 Base64 推送到所有连接局域网的屏幕共控控制端
-            vm.onFrameCaptured(base64Data, width, height)
-        } catch (e: Throwable) {
-            Log.e(TAG, "Frame capture / encoding exception: ${e.message}")
-        } finally {
-            try {
-                image?.close()
-            } catch (ignored: Exception) {}
-        }
+        }.apply { start() }
     }
 
     /**
@@ -294,12 +277,26 @@ class ScreenCaptureService : Service() {
      * 释放所有占用的物理投影采集、线程、监听以及显示组件
      */
     override fun onDestroy() {
-        isRunning = false
-        imageReader?.setOnImageAvailableListener(null, null)
+        updateRunningState(false)
+        isEncoding = false
+        try {
+            codecThread?.interrupt()
+            codecThread = null
+        } catch (ignored: Exception) {}
+        
+        try {
+            mediaCodec?.stop()
+            mediaCodec?.release()
+        } catch (ignored: Exception) {}
+        mediaCodec = null
+        
+        try {
+            codecSurface?.release()
+        } catch (ignored: Exception) {}
+        codecSurface = null
+
         virtualDisplay?.release()
         mediaProjection?.stop()
-        imageReader?.close()
-        backgroundThread?.quitSafely()
         Log.i(TAG, "ScreenCaptureService Stopped")
         super.onDestroy()
     }
