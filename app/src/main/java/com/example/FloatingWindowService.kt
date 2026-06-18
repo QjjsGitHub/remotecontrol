@@ -14,11 +14,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -32,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -159,8 +162,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
-                // 根据用户要求，悬浮窗在后台独立运行，显示比例强制固定为原始捕获尺寸的 0.50 倍(1/2 比例)
-                val scaleMultiplier = 0.50f
+                // 默认比例1/3 (0.33f)，且由 mutableState 管理，支持双指进行动态手势缩放窗口
+                var scaleMultiplier by remember { mutableStateOf(0.33f) }
+                // 触摸锁定状态：为 true 时，支持双指手势缩放窗口；为 false 时，响应远程滑动/点击操作
+                var isTouchLocked by remember { mutableStateOf(false) }
 
                 Box(
                     modifier = Modifier
@@ -195,7 +200,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.Menu,
                                     contentDescription = "Drag Window",
@@ -204,24 +212,44 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "后台共控中 (1/2 比例)",
+                                    text = if (isTouchLocked) "尺缩调节中 (${(scaleMultiplier * 100).toInt()}%)" else "后台控屏中 (${(scaleMultiplier * 100).toInt()}%)",
                                     color = Color.White,
                                     fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
                                 )
                             }
 
-                            // 独立关闭小按钮
-                            IconButton(
-                                onClick = { stopSelf() },
-                                modifier = Modifier.size(24.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Close Floating Window",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                // 触摸锁定/解锁按钮：锁定状态支持对端大小缩放，解锁状态支持控制下发
+                                IconButton(
+                                    onClick = { isTouchLocked = !isTouchLocked },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Toggle Touch Lock for Pinch Sizing",
+                                        tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // 独立关闭小按钮
+                                IconButton(
+                                    onClick = { stopSelf() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close Floating Window",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -237,53 +265,98 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                 var localViewW by remember { mutableStateOf(1) }
                                 var localViewH by remember { mutableStateOf(1) }
 
-                                Image(
-                                    bitmap = activeBitmap.asImageBitmap(),
-                                    contentDescription = "Background live screen stream",
+                                Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .onSizeChanged { size ->
-                                            // 记录并缓存当前悬浮窗真实的物理显示宽高
-                                            localViewW = size.width
-                                            localViewH = size.height
-                                        }
-                                        // 监听点击手势，将其逆向归一化转换成对端大屏物理像素位置，最终下发触摸指令
-                                        .pointerInput(localViewW, localViewH) {
-                                            detectTapGestures(
-                                                onTap = { offset ->
-                                                    if (localViewW > 0 && localViewH > 0) {
-                                                        val rx = offset.x / localViewW
-                                                        val ry = offset.y / localViewH
-                                                        viewModel.sendClientAction("TAP:$rx,$ry")
-                                                    }
+                                        // 监听双指手势缩放画面 (仅在锁定状态下生效)
+                                        .pointerInput(isTouchLocked) {
+                                            if (isTouchLocked) {
+                                                detectTransformGestures { _, _, zoom, _ ->
+                                                    scaleMultiplier = (scaleMultiplier * zoom).coerceIn(0.15f, 1.20f)
                                                 }
-                                            )
+                                            }
                                         }
-                                        // 监听滑动划扫手势，进行向量投影转换，直接注入滑动控制指令
-                                        .pointerInput(localViewW, localViewH) {
-                                            var dragStartX = 0f
-                                            var dragStartY = 0f
-                                            detectDragGestures(
-                                                onDragStart = { offset ->
-                                                    dragStartX = offset.x
-                                                    dragStartY = offset.y
-                                                },
-                                                onDragEnd = {},
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    val currentX = change.position.x
-                                                    val currentY = change.position.y
-                                                    if (localViewW > 0 && localViewH > 0) {
-                                                        val rsx = dragStartX / localViewW
-                                                        val rsy = dragStartY / localViewH
-                                                        val rex = currentX / localViewW
-                                                        val rey = currentY / localViewH
-                                                        viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
-                                                    }
+                                ) {
+                                    Image(
+                                        bitmap = activeBitmap.asImageBitmap(),
+                                        contentDescription = "Background live screen stream",
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .onSizeChanged { size ->
+                                                // 记录并缓存当前悬浮窗真实的物理显示宽高
+                                                localViewW = size.width
+                                                localViewH = size.height
+                                            }
+                                            // 监听点击手势 (仅在解锁/未锁定状态下响应反向控制)
+                                            .pointerInput(localViewW, localViewH, isTouchLocked) {
+                                                if (!isTouchLocked) {
+                                                    detectTapGestures(
+                                                        onTap = { offset ->
+                                                            if (localViewW > 0 && localViewH > 0) {
+                                                                val rx = offset.x / localViewW
+                                                                val ry = offset.y / localViewH
+                                                                viewModel.sendClientAction("TAP:$rx,$ry")
+                                                            }
+                                                        }
+                                                    )
                                                 }
-                                            )
+                                            }
+                                            // 监听滑动划扫手势 (仅在解锁/未锁定状态下响应反向控制)
+                                            .pointerInput(localViewW, localViewH, isTouchLocked) {
+                                                if (!isTouchLocked) {
+                                                    var dragStartX = 0f
+                                                    var dragStartY = 0f
+                                                    detectDragGestures(
+                                                        onDragStart = { offset ->
+                                                            dragStartX = offset.x
+                                                            dragStartY = offset.y
+                                                        },
+                                                        onDragEnd = {},
+                                                        onDrag = { change, dragAmount ->
+                                                            change.consume()
+                                                            val currentX = change.position.x
+                                                            val currentY = change.position.y
+                                                            if (localViewW > 0 && localViewH > 0) {
+                                                                val rsx = dragStartX / localViewW
+                                                                val rsy = dragStartY / localViewH
+                                                                val rex = currentX / localViewW
+                                                                val rey = currentY / localViewH
+                                                                viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                    )
+
+                                    // 锁定状态下的半透明遮罩与手势提示 HUD
+                                    if (isTouchLocked) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.45f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Lock,
+                                                    contentDescription = "Pinch to zoom mode active",
+                                                    tint = Color(0xFFFF5252),
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(
+                                                    text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = TextAlign.Center,
+                                                    lineHeight = 14.sp
+                                                )
+                                            }
                                         }
-                                )
+                                    }
+                                }
                             } else {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),

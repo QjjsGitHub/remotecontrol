@@ -155,6 +155,33 @@ fun SimplifiedDashboardScreen(
         }
     }
 
+    // Automatically launch background floating window on connection to remote control
+    LaunchedEffect(connectionState) {
+        if (connectionState == ConnectionState.Connected) {
+            if (Settings.canDrawOverlays(context)) {
+                if (!FloatingWindowService.isRunning) {
+                    val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                    context.startService(serviceIntent)
+                    isBgOverlayActive = true
+                }
+            } else {
+                Toast.makeText(context, "连接成功！请授予悬浮窗权限以便使用独立后台悬浮受控端", Toast.LENGTH_LONG).show()
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(intent)
+            }
+        } else {
+            // connection lost, we can stop the floating service if running
+            if (FloatingWindowService.isRunning) {
+                val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                context.stopService(serviceIntent)
+                isBgOverlayActive = false
+            }
+        }
+    }
+
     // Drag / Floating Window State properties
     var floatX by remember { mutableStateOf(100f) }
     var floatY by remember { mutableStateOf(400f) }
@@ -727,8 +754,9 @@ fun SimplifiedDashboardScreen(
             }
 
             // ------------------ INTERACTIVE FLOATING PICTURE-IN-PICTURE (PIP) SCREEN MIRROR OVERLAY ------------------
+            // Disabled in-app screen mirror to use background floating window exclusively as user requested
             val activeBitmap = mirroredBitmap
-            if (connectionState == ConnectionState.Connected) {
+            if (false && connectionState == ConnectionState.Connected) {
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(floatX.roundToInt(), floatY.roundToInt()) }
