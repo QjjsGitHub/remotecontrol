@@ -448,10 +448,10 @@ class LanRemoteViewModel : ViewModel() {
                 try {
                     val remainder = message.substringAfter("H264:")
                     val parts = remainder.split(":", limit = 3)
-                    if (parts.size >= 2) {
+                    if (parts.size == 3) {
                         val flags = parts[0].toIntOrNull() ?: 0
-                        val presentationTimeUs = if (parts.size >= 3) (parts[1].toLongOrNull() ?: 0L) else 0L
-                        val base64Bytes = if (parts.size >= 3) parts[2] else parts[1]
+                        val presentationTimeUs = parts[1].toLongOrNull() ?: 0L
+                        val base64Bytes = parts[2]
                         val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
                         
                         val frameTriple = Triple(bytes, flags, presentationTimeUs)
