@@ -59,7 +59,6 @@ class LanRemoteViewModel : ViewModel() {
 
     // 当前已接入服务端的控制端客户端 IP 列表
     private val _connectedClients = MutableStateFlow<List<String>>(emptyList())
-    val connectedClients: StateFlow<List<String>> = _connectedClients.asStateFlow()
 
     // 被控端本地系统与网络交互日志
     private val _serverLogs = MutableStateFlow<List<LogEntry>>(emptyList())
@@ -305,19 +304,6 @@ class LanRemoteViewModel : ViewModel() {
         socketServer?.broadcastData(buffer.array()) // 注意这里方法名改为了 broadcastData
     }
 
-    /**
-     * 由前台 ScreenCaptureService 持续、不断回调输入的最新 H.264 视频流编码碎片包
-     * @param base64Data 数据包的 Base64 压缩编码格式串
-     * @param flags 切片标识 flags (例如 Buffer_Flag_Key_Frame)
-     * @param presentationTimeUs 帧渲染展示绝对时间(微秒)
-     */
-    /*fun onEncodedFrameCaptured(base64Data: String, flags: Int, presentationTimeUs: Long) {
-        val msg = "H264:$flags:$presentationTimeUs:$base64Data"
-        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-            cachedCodecConfig = msg
-        }
-        socketServer?.broadcastMessage(msg)
-    }*/
 
     // 修改方法签名，将 base64Data: String 改为 data: ByteArray
     fun onEncodedFrameCaptured(data: ByteArray, flags: Int, presentationTimeUs: Long) {

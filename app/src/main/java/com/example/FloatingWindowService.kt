@@ -347,7 +347,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                             val hasFrame = hasFrameReceived
                             if (hasFrame) {
                                 var localViewW by remember { mutableIntStateOf(1) }
-                                var localViewH by remember { mutableStateOf(1) }
+                                var localViewH by remember { mutableIntStateOf(1) }
 
                                 //key(videoWidth, videoHeight) {
 
