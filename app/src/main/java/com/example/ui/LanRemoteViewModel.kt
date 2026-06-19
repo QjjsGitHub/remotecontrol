@@ -2,7 +2,6 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -20,12 +19,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.text.SimpleDateFormat
 import java.util.*
-
-enum class Role {
-    NONE,
-    CONTROLLER,
-    RECEIVER
-}
 
 enum class LogType {
     INFO,
@@ -47,10 +40,6 @@ class LanRemoteViewModel : ViewModel() {
         var instance: LanRemoteViewModel? = null
             private set
     }
-
-    // 当前模式：控制端/被控端(服务端)/未配对
-    private val _currentRole = MutableStateFlow(Role.NONE)
-    val currentRole: StateFlow<Role> = _currentRole.asStateFlow()
 
     // 被控端(服务端)运行状态
     private val _isServerRunning = MutableStateFlow(false)
@@ -140,35 +129,6 @@ class LanRemoteViewModel : ViewModel() {
         instance = this
         // 默认初始化即开启局域网探针，以便及时嗅探周边的主机节点
         startDiscovery()
-    }
-
-    /**
-     * 选择大屏当前所处的工作角色模式（主控端、被控受控端，或者脱机无模式）
-     * @param role 新设定的工作角色 [Role]
-     * @param context 加载上下文，启动或停止底层服务所需
-     */
-    fun selectRole(role: Role, context: Context? = null) {
-        _currentRole.value = role
-        
-        // 在切换角色模式时，首先全量清理及关闭已开启的其他套接字及广播探测接口
-        stopServer(context)
-        stopDiscovery()
-        disconnectFromServer()
-
-        when (role) {
-            Role.CONTROLLER -> {
-                // 如果是控制端，开启局域网 UDP 嗅探侦听
-                startDiscovery()
-            }
-            Role.RECEIVER -> {
-                // 如果是被控端，自适应拉起 TCP 端口侦听和局域网 IP 存在广播
-                context?.let { startServer(it) }
-            }
-            Role.NONE -> {
-                _hasFrameReceived.value = false
-                _clientCodecConfig.value = null
-            }
-        }
     }
 
     /**
