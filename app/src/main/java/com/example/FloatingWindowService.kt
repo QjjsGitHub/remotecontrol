@@ -188,7 +188,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 // 依据远端画布分辨率自动计算宽高纵横比，实现完美的自适应缩放，且高度随宽度弹性拉伸
                 val aspectRatio =
                     if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
-                val windowWidthDp = (clientScreenWidthDp / 3f) * scaleMultiplier
+                val windowWidthDp = clientScreenWidthDp * scaleMultiplier
                 val windowHeightDp = windowWidthDp * aspectRatio
 
                 Log.d(
@@ -200,9 +200,9 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 Box(
                     modifier = Modifier
                         .width(windowWidthDp.dp)
-                        .height((windowHeightDp + 36).dp)
+                        .height((windowHeightDp + 24).dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .border(3.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
+                        .border(2.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
                         .background(Color.Black)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -211,7 +211,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(36.dp)
+                                .height(24.dp)
                                 .background(Color(0xFF6200EE))
                                 .pointerInput(Unit) {
                                     detectDragGestures { change, dragAmount ->
@@ -307,8 +307,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                                 detectTransformGestures { _, _, zoom, _ ->
                                                     val newScale =
                                                         (scaleMultiplier * zoom).coerceIn(
-                                                            0.4f,
-                                                            3.0f
+                                                            0.2f,
+                                                            0.8f
                                                         )
                                                     viewModel.updateFloatingScaleMultiplier(
                                                         newScale
@@ -479,8 +479,8 @@ fun VideoSurfaceViewer(
     viewModel: LanRemoteViewModel,
     modifier: Modifier = Modifier
 ) {
-    val videoWidth by viewModel.videoWidth.collectAsState()
-    val videoHeight by viewModel.videoHeight.collectAsState()
+    val videoWidth by viewModel.mirroredWidth.collectAsState()
+    val videoHeight by viewModel.mirroredHeight.collectAsState()
     val decoderRef = remember { Ref<MediaCodec>() }
 
     LaunchedEffect(viewModel) {

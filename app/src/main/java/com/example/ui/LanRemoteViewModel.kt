@@ -92,14 +92,6 @@ class LanRemoteViewModel : ViewModel() {
     val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> =
         _clientCodecConfig.asStateFlow()
 
-    // 视频流编码对应的自适应缩减宽度像素
-    private val _videoWidth = MutableStateFlow(360)
-    val videoWidth: StateFlow<Int> = _videoWidth.asStateFlow()
-
-    // 视频流编码对应的自适应缩减高度像素
-    private val _videoHeight = MutableStateFlow(640)
-    val videoHeight: StateFlow<Int> = _videoHeight.asStateFlow()
-
     // 同步镜像的物理参考大屏宽度
     private val _mirroredWidth = MutableStateFlow(1080)
     val mirroredWidth: StateFlow<Int> = _mirroredWidth.asStateFlow()
@@ -110,7 +102,7 @@ class LanRemoteViewModel : ViewModel() {
 
     // 悬浮窗的缩放比例状态流，默认设为 1.0f (基准为客户端屏幕宽度的 1/3)
     // 使得 MainActivity 的 Slider 控制可直接与 FloatingWindowService 悬浮窗口保持实时、双向的同步适配
-    private val _floatingScaleMultiplier = MutableStateFlow(1.0f)
+    private val _floatingScaleMultiplier = MutableStateFlow(0.3f)
     val floatingScaleMultiplier: StateFlow<Float> = _floatingScaleMultiplier.asStateFlow()
 
     /**
@@ -283,12 +275,10 @@ class LanRemoteViewModel : ViewModel() {
         // 自动判定旋转状态：0 竖屏，1 横屏
         val rotation = if (width > height) 1 else 0
 
-        var captureWidth = (width * 0.35f).toInt()
-        var captureHeight = (height * 0.35f).toInt()
-        captureWidth = (captureWidth / 16) * 16
-        captureHeight = (captureHeight / 16) * 16
-        if (captureWidth <= 0) captureWidth = 360
-        if (captureHeight <= 0) captureHeight = 640
+        var captureWidth = ((width * 0.8).toInt() / 16) * 16
+        var captureHeight = ((height * 0.8).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = 1080
+        if (captureHeight <= 0) captureHeight = 2400
 
         addServerLog(
             "本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight}), 旋转状态: $rotation",
@@ -299,7 +289,7 @@ class LanRemoteViewModel : ViewModel() {
         // 构造二进制包：1 byte(类型:3代表SIZE) + N bytes(字符串数据)
         // 修改协议串：增加第五个参数 rotation
         val sizeMsg =
-            "SIZE:$width,$height,$captureWidth,$captureHeight,$rotation".toByteArray(Charsets.UTF_8)
+            "SIZE:$captureWidth,$captureHeight,$rotation".toByteArray(Charsets.UTF_8)
         val buffer = java.nio.ByteBuffer.allocate(1 + sizeMsg.size)
         buffer.put(3.toByte()) // TYPE_SIZE
         buffer.put(sizeMsg)
@@ -455,68 +445,6 @@ class LanRemoteViewModel : ViewModel() {
         _manualIpField.value = ip
     }
 
-    /**
-     * 处理连接后各类别来自服务端的网络数据事件流(配置帧、数据帧、大屏分辨率参数)
-     * @param message 从 TCP 接收到的高帧率字节流 Base64 编码或分辨率 SIZE 头部
-     */
-    /*fun handleReceivedMessage(message: String) {
-        when {
-            message.startsWith("H264:") -> {
-                try {
-                    val remainder = message.substringAfter("H264:")
-                    val parts = remainder.split(":", limit = 3)
-                    if (parts.size == 3) {
-                        val flags = parts[0].toIntOrNull() ?: 0
-                        val presentationTimeUs = parts[1].toLongOrNull() ?: 0L
-                        val base64Bytes = parts[2]
-                        val bytes = Base64.decode(base64Bytes, Base64.DEFAULT)
-                        
-                        val frameTriple = Triple(bytes, flags, presentationTimeUs)
-                        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                            _clientCodecConfig.value = frameTriple
-                        }
-                        
-                        _encodedFrameFlow.tryEmit(frameTriple)
-                        _hasFrameReceived.value = true
-                    }
-                } catch (e: Throwable) {
-                    Log.e(TAG, "视频压缩切片接收或还原时由于异常中断: ${e.message}")
-                }
-            }
-            message.startsWith("SIZE:") -> {
-                try {
-                    val sizes = message.substringAfter("SIZE:").split(",")
-                    if (sizes.size >= 2) {
-                        val w = sizes[0].toIntOrNull() ?: 1080
-                        val h = sizes[1].toIntOrNull() ?: 2400
-                        _mirroredWidth.value = w
-                        _mirroredHeight.value = h
-                        addControllerLog("更新远端显示分辨率匹配: ${w}x${h}", LogType.INFO)
-                    }
-                    if (sizes.size >= 4) {
-                        val vw = sizes[2].toIntOrNull() ?: 360
-                        val vh = sizes[3].toIntOrNull() ?: 640
-                        _videoWidth.value = vw
-                        _videoHeight.value = vh
-                    } else if (sizes.size == 2) {
-                        val w = sizes[0].toIntOrNull() ?: 1080
-                        val h = sizes[1].toIntOrNull() ?: 2400
-                        var vw = (w * 0.35f).toInt()
-                        var vh = (h * 0.35f).toInt()
-                        vw = (vw / 16) * 16
-                        vh = (vh / 16) * 16
-                        if (vw <= 0) vw = 360
-                        if (vh <= 0) vh = 640
-                        _videoWidth.value = vw
-                        _videoHeight.value = vh
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "解析远端屏幕分辨率同步规格失败: ${e.message}")
-                }
-            }
-        }
-    }*/
-
     fun handleReceivedData(payload: ByteArray) {
         try {
             val buffer = java.nio.ByteBuffer.wrap(payload)
@@ -542,22 +470,15 @@ class LanRemoteViewModel : ViewModel() {
                 val message = String(msgBytes, Charsets.UTF_8)
                 if (message.startsWith("SIZE:")) {
                     val sizes = message.substringAfter("SIZE:").split(",")
-                    if (sizes.size >= 2) {
+                    if (sizes.size >= 3) {
                         _mirroredWidth.value = sizes[0].toIntOrNull() ?: 1080
                         _mirroredHeight.value = sizes[1].toIntOrNull() ?: 2400
-                    }
-                    if (sizes.size >= 4) {
-                        _videoWidth.value = sizes[2].toIntOrNull() ?: 360
-                        _videoHeight.value = sizes[3].toIntOrNull() ?: 640
-                    }
-                    // 解析旋转标志位（如果存在）
-                    if (sizes.size >= 5) {
-                        val rotation = sizes[4].toIntOrNull() ?: 0
+                        val rotation = sizes[2].toIntOrNull() ?: 0
                         addControllerLog(
-                            "同步远端旋转状态: ${if (rotation == 1) "横屏" else "竖屏"}",
+                            "同步远端屏幕状态: 镜像宽:${_mirroredWidth.value}  镜像高:${_mirroredHeight.value} " +
+                                    " ${if (rotation == 1) "横屏" else "竖屏"}",
                             LogType.INFO
                         )
-                        // 你可以在这里额外定义一个 _serverRotation 状态流供 UI 使用
                     }
                 }
             }

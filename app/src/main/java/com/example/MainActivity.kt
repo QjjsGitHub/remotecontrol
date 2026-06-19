@@ -79,7 +79,10 @@ class MainActivity : ComponentActivity() {
             } else {
                 startService(serviceIntent)
             }
-            LanRemoteViewModel.instance?.addServerLog("媒体投影屏幕捕获授权成功，已启动后台捕获服务", com.example.ui.LogType.SUCCESS)
+            LanRemoteViewModel.instance?.addServerLog(
+                "媒体投影屏幕捕获授权成功，已启动后台捕获服务",
+                com.example.ui.LogType.SUCCESS
+            )
         } else {
             Toast.makeText(this, "录屏请求被拒绝，无法启动屏幕共控分享", Toast.LENGTH_SHORT).show()
         }
@@ -88,8 +91,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        
+        mediaProjectionManager =
+            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
         // 如果运行在 Android 13 (Tiramisu) 级别以上的系统，检查并动态请求 POST_NOTIFICATIONS 推送通知权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -161,7 +165,11 @@ fun SimplifiedDashboardScreen(
                     isBgOverlayActive = true
                 }
             } else {
-                Toast.makeText(context, "连接成功！请授予悬浮窗权限以便使用独立后台悬浮受控端", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    "连接成功！请授予悬浮窗权限以便使用独立后台悬浮受控端",
+                    Toast.LENGTH_LONG
+                ).show()
                 val intent = Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     android.net.Uri.parse("package:${context.packageName}")
@@ -215,7 +223,10 @@ fun SimplifiedDashboardScreen(
                             .size(44.dp)
                             .background(
                                 Brush.linearGradient(
-                                    colors = listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary)
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.secondary
+                                    )
                                 ),
                                 CircleShape
                             ),
@@ -248,7 +259,9 @@ fun SimplifiedDashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (isServerRunning) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+                        containerColor = if (isServerRunning) MaterialTheme.colorScheme.primaryContainer.copy(
+                            alpha = 0.25f
+                        )
                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     ),
                     border = borderStrokeForServer(isServerRunning)
@@ -260,7 +273,11 @@ fun SimplifiedDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Server", tint = MaterialTheme.colorScheme.primary)
+                                Icon(
+                                    Icons.Default.PlayArrow,
+                                    contentDescription = "Server",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "1. 服务端设置 (被控端)",
@@ -271,7 +288,9 @@ fun SimplifiedDashboardScreen(
                             // Server running status dot
                             Card(
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isServerRunning) Color(0xFF4CAF50).copy(alpha = 0.2f) else Color.Red.copy(alpha = 0.15f)
+                                    containerColor = if (isServerRunning) Color(0xFF4CAF50).copy(
+                                        alpha = 0.2f
+                                    ) else Color.Red.copy(alpha = 0.15f)
                                 ),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
@@ -322,7 +341,11 @@ fun SimplifiedDashboardScreen(
 
                         if (isServerRunning) {
                             Spacer(modifier = Modifier.height(14.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                    alpha = 0.5f
+                                )
+                            )
                             Spacer(modifier = Modifier.height(14.dp))
 
                             // Server IP Reference Node
@@ -331,18 +354,28 @@ fun SimplifiedDashboardScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("本机 IP 配对节点:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    "本机 IP 配对节点:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Card(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                                     shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    border = BorderStroke(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.outlineVariant
+                                    )
                                 ) {
                                     Text(
                                         text = serverIp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 14.sp,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        modifier = Modifier.padding(
+                                            horizontal = 10.dp,
+                                            vertical = 4.dp
+                                        )
                                     )
                                 }
                             }
@@ -357,11 +390,18 @@ fun SimplifiedDashboardScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
-                                        .background(if (isScreenCaptureRunning) Color(0xFF4CAF50) else Color.Red, CircleShape)
+                                        .background(
+                                            if (isScreenCaptureRunning) Color(0xFF4CAF50) else Color.Red,
+                                            CircleShape
+                                        )
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("后台截屏直播服务", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "后台截屏直播服务",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                     Text(
                                         text = if (isScreenCaptureRunning) "捕获引擎就绪，投屏广播中" else "需要启动媒体录屏授权",
                                         style = MaterialTheme.typography.labelSmall,
@@ -371,8 +411,16 @@ fun SimplifiedDashboardScreen(
                                 Button(
                                     onClick = {
                                         if (isScreenCaptureRunning) {
-                                            context.stopService(Intent(context, ScreenCaptureService::class.java))
-                                            viewModel.addServerLog("主动停止了屏幕捕捉进程", com.example.ui.LogType.WARNING)
+                                            context.stopService(
+                                                Intent(
+                                                    context,
+                                                    ScreenCaptureService::class.java
+                                                )
+                                            )
+                                            viewModel.addServerLog(
+                                                "主动停止了屏幕捕捉进程",
+                                                com.example.ui.LogType.WARNING
+                                            )
                                         } else {
                                             onRequestScreenShare()
                                         }
@@ -380,10 +428,16 @@ fun SimplifiedDashboardScreen(
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = if (isScreenCaptureRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
                                     ),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    contentPadding = PaddingValues(
+                                        horizontal = 12.dp,
+                                        vertical = 4.dp
+                                    ),
                                     modifier = Modifier.height(36.dp)
                                 ) {
-                                    Text(if (isScreenCaptureRunning) "停投" else "启投", fontSize = 12.sp)
+                                    Text(
+                                        if (isScreenCaptureRunning) "停投" else "启投",
+                                        fontSize = 12.sp
+                                    )
                                 }
                             }
 
@@ -397,11 +451,18 @@ fun SimplifiedDashboardScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
-                                        .background(if (isAccessibilityEnabled) Color(0xFF4CAF50) else Color.Red, CircleShape)
+                                        .background(
+                                            if (isAccessibilityEnabled) Color(0xFF4CAF50) else Color.Red,
+                                            CircleShape
+                                        )
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("全局仿真触控无障碍手势", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "全局仿真触控无障碍手势",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                     Text(
                                         text = if (isAccessibilityEnabled) "无障碍勾住激活，接收动作时可模拟点击" else "未授权，无法代理模拟动作映射",
                                         style = MaterialTheme.typography.labelSmall,
@@ -411,17 +472,29 @@ fun SimplifiedDashboardScreen(
                                 Button(
                                     onClick = {
                                         try {
-                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            }
+                                            val intent =
+                                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                }
                                             context.startActivity(intent)
-                                            Toast.makeText(context, "请在系统页面找到「屏幕共控」服务并启用权限", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(
+                                                context,
+                                                "请在系统页面找到「屏幕共控」服务并启用权限",
+                                                Toast.LENGTH_LONG
+                                            ).show()
                                         } catch (e: Exception) {
-                                            Toast.makeText(context, "跳转失败，请到系统设置开启无障碍", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(
+                                                context,
+                                                "跳转失败，请到系统设置开启无障碍",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    contentPadding = PaddingValues(
+                                        horizontal = 12.dp,
+                                        vertical = 4.dp
+                                    ),
                                     modifier = Modifier.height(36.dp)
                                 ) {
                                     Text("配置授权", fontSize = 12.sp)
@@ -436,7 +509,9 @@ fun SimplifiedDashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (connectionState == ConnectionState.Connected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.25f)
+                        containerColor = if (connectionState == ConnectionState.Connected) MaterialTheme.colorScheme.secondaryContainer.copy(
+                            alpha = 0.25f
+                        )
                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     ),
                     border = borderStrokeForClient(connectionState)
@@ -448,7 +523,11 @@ fun SimplifiedDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Phone, contentDescription = "Client", tint = MaterialTheme.colorScheme.secondary)
+                                Icon(
+                                    Icons.Default.Phone,
+                                    contentDescription = "Client",
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "2. 客户端设置 (控制端)",
@@ -555,7 +634,11 @@ fun SimplifiedDashboardScreen(
                         // 悬浮窗高级参数配置子面板 (仅在建立连接并成功接收捕获帧时显示)
                         if (connectionState == ConnectionState.Connected && hasFrameReceived) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                    alpha = 0.5f
+                                )
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
@@ -573,15 +656,15 @@ fun SimplifiedDashboardScreen(
                             val configuration = LocalConfiguration.current
                             val clientScreenWidthDp = configuration.screenWidthDp.toFloat()
                             // 依据远端画面纵横比自适应高度
-                            val aspectRatio = if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
-                            // 默认尺寸标准是占屏幕宽度的 1/3 (即这里的 clientScreenWidthDp / 3f)，再乘以 Slider 传递出的缩放系数
-                            val currentWidthDp = (clientScreenWidthDp / 3f) * scaleMultiplier
+                            val aspectRatio =
+                                if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
+                            val currentWidthDp = clientScreenWidthDp * scaleMultiplier
                             val currentHeightDp = currentWidthDp * aspectRatio
 
                             Slider(
                                 value = scaleMultiplier,
                                 onValueChange = { viewModel.updateFloatingScaleMultiplier(it) },
-                                valueRange = 0.5f..2.5f,
+                                valueRange = 0.2f..0.8f,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Text(
@@ -594,7 +677,11 @@ fun SimplifiedDashboardScreen(
                             )
 
                             Spacer(modifier = Modifier.height(16.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                    alpha = 0.5f
+                                )
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
@@ -613,19 +700,25 @@ fun SimplifiedDashboardScreen(
                             Button(
                                 onClick = {
                                     if (isBgOverlayActive) {
-                                        val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                                        val serviceIntent =
+                                            Intent(context, FloatingWindowService::class.java)
                                         context.stopService(serviceIntent)
                                         isBgOverlayActive = false
                                     } else {
                                         if (!android.provider.Settings.canDrawOverlays(context)) {
-                                            Toast.makeText(context, "请先授予：显示在其他应用上层 (悬浮窗权限)", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(
+                                                context,
+                                                "请先授予：显示在其他应用上层 (悬浮窗权限)",
+                                                Toast.LENGTH_LONG
+                                            ).show()
                                             val intent = Intent(
                                                 android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                                 android.net.Uri.parse("package:${context.packageName}")
                                             )
                                             context.startActivity(intent)
                                         } else {
-                                            val serviceIntent = Intent(context, FloatingWindowService::class.java)
+                                            val serviceIntent =
+                                                Intent(context, FloatingWindowService::class.java)
                                             context.startService(serviceIntent)
                                             isBgOverlayActive = true
                                         }
@@ -634,7 +727,9 @@ fun SimplifiedDashboardScreen(
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isBgOverlayActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                 ),
-                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Row(
@@ -660,7 +755,11 @@ fun SimplifiedDashboardScreen(
                         .fillMaxWidth()
                         .height(260.dp),
                     shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f))
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = 0.30f
+                        )
+                    )
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(
@@ -670,7 +769,12 @@ fun SimplifiedDashboardScreen(
                         ) {
                             // 日志分类栏选择滑块 (Tab Selector)
                             Row(
-                                modifier = Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp)).padding(2.dp)
+                                modifier = Modifier
+                                    .background(
+                                        MaterialTheme.colorScheme.surface,
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .padding(2.dp)
                             ) {
                                 Text(
                                     text = "服务端事件",
@@ -714,20 +818,46 @@ fun SimplifiedDashboardScreen(
                             if (activeLogTab == 0) {
                                 // 服务端日志显示面板 (Server Logs)
                                 if (serverLogs.isEmpty()) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text("无服务端交互反馈事件...", color = MaterialTheme.colorScheme.outline, fontSize = 12.sp)
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "无服务端交互反馈事件...",
+                                            color = MaterialTheme.colorScheme.outline,
+                                            fontSize = 12.sp
+                                        )
                                     }
                                 } else {
-                                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
                                         items(serverLogs) { log ->
                                             Row {
-                                                Text("[${log.timestamp}] ", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                                                Text(
+                                                    "[${log.timestamp}] ",
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
                                                 val col = when (log.type) {
-                                                    com.example.ui.LogType.SUCCESS -> Color(0xFF4CAF50)
-                                                    com.example.ui.LogType.WARNING -> Color(0xFFFF9800)
+                                                    com.example.ui.LogType.SUCCESS -> Color(
+                                                        0xFF4CAF50
+                                                    )
+
+                                                    com.example.ui.LogType.WARNING -> Color(
+                                                        0xFFFF9800
+                                                    )
+
                                                     com.example.ui.LogType.INFO -> MaterialTheme.colorScheme.onSurface
                                                 }
-                                                Text(log.message, fontSize = 11.sp, color = col, fontWeight = FontWeight.Medium)
+                                                Text(
+                                                    log.message,
+                                                    fontSize = 11.sp,
+                                                    color = col,
+                                                    fontWeight = FontWeight.Medium
+                                                )
                                             }
                                         }
                                     }
@@ -735,20 +865,46 @@ fun SimplifiedDashboardScreen(
                             } else {
                                 // 客户端/控制端日志显示面板 (Client Logs)
                                 if (controllerLogs.isEmpty()) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text("无客户端操作日志...", color = MaterialTheme.colorScheme.outline, fontSize = 12.sp)
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "无客户端操作日志...",
+                                            color = MaterialTheme.colorScheme.outline,
+                                            fontSize = 12.sp
+                                        )
                                     }
                                 } else {
-                                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
                                         items(controllerLogs) { log ->
                                             Row {
-                                                Text("[${log.timestamp}] ", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                                                Text(
+                                                    "[${log.timestamp}] ",
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
                                                 val col = when (log.type) {
-                                                    com.example.ui.LogType.SUCCESS -> Color(0xFF4CAF50)
-                                                    com.example.ui.LogType.WARNING -> Color(0xFFFF9800)
+                                                    com.example.ui.LogType.SUCCESS -> Color(
+                                                        0xFF4CAF50
+                                                    )
+
+                                                    com.example.ui.LogType.WARNING -> Color(
+                                                        0xFFFF9800
+                                                    )
+
                                                     com.example.ui.LogType.INFO -> MaterialTheme.colorScheme.onSurface
                                                 }
-                                                Text(log.message, fontSize = 11.sp, color = col, fontWeight = FontWeight.Medium)
+                                                Text(
+                                                    log.message,
+                                                    fontSize = 11.sp,
+                                                    color = col,
+                                                    fontWeight = FontWeight.Medium
+                                                )
                                             }
                                         }
                                     }
@@ -772,9 +928,9 @@ fun SimplifiedDashboardScreen(
 @Composable
 fun borderStrokeForServer(active: Boolean): BorderStroke {
     return if (active) {
-         BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
     } else {
-         BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -786,8 +942,8 @@ fun borderStrokeForServer(active: Boolean): BorderStroke {
 @Composable
 fun borderStrokeForClient(conState: ConnectionState): BorderStroke {
     return if (conState == ConnectionState.Connected) {
-         BorderStroke(2.dp, MaterialTheme.colorScheme.secondary)
+        BorderStroke(2.dp, MaterialTheme.colorScheme.secondary)
     } else {
-         BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     }
 }

@@ -39,11 +39,11 @@ class ScreenCaptureService : Service() {
         private const val TAG = "ScreenCaptureService"
         private const val CHANNEL_ID = "ScreenCaptureChannel"
         private const val NOTIFICATION_ID = 8821
-        
+
         // 使用 StateFlow 实现运行状态的响应式暴露，这样可以在 Jetpack Compose UI 中完美响应
         private val _isServiceRunning = MutableStateFlow(false)
         val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
-        
+
         /**
          * 记录后台流式屏幕截取服务是否正在运行的全局标识
          */
@@ -60,11 +60,13 @@ class ScreenCaptureService : Service() {
 
     // 系统多媒体投影管理器 (用于请求和管理屏幕录制)
     private var mediaProjectionManager: MediaProjectionManager? = null
+
     // 媒体投影连接会话
     private var mediaProjection: MediaProjection? = null
+
     // 系统虚拟显示器 (将屏幕物理像素投影到我们自定义的编码器 Surface 上)
     private var virtualDisplay: VirtualDisplay? = null
-    
+
     // MediaCodec 硬件 AVC/H264 编码器
     private var mediaCodec: MediaCodec? = null
     private var codecSurface: Surface? = null
@@ -85,15 +87,23 @@ class ScreenCaptureService : Service() {
                 // 获取旋转后的真实物理像素
                 windowManager.defaultDisplay.getRealMetrics(metrics)
 
-                Log.i("ScreenCapture", "检测到屏幕旋转: ${metrics.widthPixels}x${metrics.heightPixels}")
+                Log.i(
+                    "ScreenCapture",
+                    "检测到屏幕旋转: ${metrics.widthPixels}x${metrics.heightPixels}"
+                )
 
+                //todo zouleliangci
                 // 通知 ViewModel 更新宽高并广播给客户端
-                LanRemoteViewModel.instance?.onScreenSizeDetermined(metrics.widthPixels, metrics.heightPixels)
+                LanRemoteViewModel.instance?.onScreenSizeDetermined(
+                    metrics.widthPixels,
+                    metrics.heightPixels
+                )
 
                 // 【核心提示】旋转后，通常需要重启 VirtualDisplay 否则画面会拉伸或黑屏
                 restartVirtualDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
             }
         }
+
         override fun onDisplayAdded(displayId: Int) {}
         override fun onDisplayRemoved(displayId: Int) {}
     }
@@ -135,17 +145,22 @@ class ScreenCaptureService : Service() {
         codecSurface = null
 
         // 3. 计算旋转后的新录屏分辨率 (对齐到 16 字节)
-        var captureWidth = (width * 0.35f).toInt()
-        var captureHeight = (height * 0.35f).toInt()
-        captureWidth = (captureWidth / 16) * 16
-        captureHeight = (captureHeight / 16) * 16
-        if (captureWidth <= 0) captureWidth = 360
-        if (captureHeight <= 0) captureHeight = 640
+        var captureWidth = ((width * 0.8).toInt() / 16) * 16
+        var captureHeight = ((height * 0.8).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = 1080
+        if (captureHeight <= 0) captureHeight = 2400
 
         // 4. 使用新分辨率重新创建并配置 MediaCodec
         try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, captureWidth, captureHeight)
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            val format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                captureWidth,
+                captureHeight
+            )
+            format.setInteger(
+                MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+            )
             format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
             format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
@@ -179,7 +194,10 @@ class ScreenCaptureService : Service() {
         isEncoding = true
         startEncodingLoop()
 
-        LanRemoteViewModel.instance?.addServerLog("成功适应屏幕旋转，流媒体分辨率变更为: ${captureWidth}x${captureHeight}", com.example.ui.LogType.SUCCESS)
+        LanRemoteViewModel.instance?.addServerLog(
+            "成功适应屏幕旋转，流媒体分辨率变更为: ${captureWidth}x${captureHeight}",
+            com.example.ui.LogType.SUCCESS
+        )
     }
 
     /**
@@ -188,10 +206,10 @@ class ScreenCaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         updateRunningState(true)
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionManager =
+            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
-
 
 
     }
@@ -202,16 +220,21 @@ class ScreenCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         val notification = createNotification()
-        
+
         // 在 Android Q 及以上版本，前台服务必须明确声明 mediaProjection TYPE，否则会导致崩溃或启动失败
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
 
         // 获取来自 Activity 启动授权后传入的屏幕捕捉会话结果代码与授权信息
-        val resultCode = intent?.getIntExtra("RESULT_CODE", android.app.Activity.RESULT_CANCELED) ?: android.app.Activity.RESULT_CANCELED
+        val resultCode = intent?.getIntExtra("RESULT_CODE", android.app.Activity.RESULT_CANCELED)
+            ?: android.app.Activity.RESULT_CANCELED
         val data = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getParcelableExtra("DATA", Intent::class.java)
@@ -227,7 +250,10 @@ class ScreenCaptureService : Service() {
         // 验证系统的屏幕投射许可结果是否已经被正常授予
         if (resultCode != android.app.Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Result code is not OK or data intent is null. Stopping service...")
-            LanRemoteViewModel.instance?.addServerLog("投屏启动失败：未获得用户授权", com.example.ui.LogType.WARNING)
+            LanRemoteViewModel.instance?.addServerLog(
+                "投屏启动失败：未获得用户授权",
+                com.example.ui.LogType.WARNING
+            )
             stopSelf()
             return START_NOT_STICKY
         }
@@ -237,18 +263,27 @@ class ScreenCaptureService : Service() {
             mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
             if (mediaProjection == null) {
                 Log.e(TAG, "Failed to get MediaProjection instance")
-                LanRemoteViewModel.instance?.addServerLog("投屏授权获取失败：MediaProjection projection is null", com.example.ui.LogType.WARNING)
+                LanRemoteViewModel.instance?.addServerLog(
+                    "投屏授权获取失败：MediaProjection projection is null",
+                    com.example.ui.LogType.WARNING
+                )
                 stopSelf()
                 return START_NOT_STICKY
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException getting MediaProjection: ${e.message}")
-            LanRemoteViewModel.instance?.addServerLog("系统投屏拒绝授权或已被占用: ${e.message}", com.example.ui.LogType.WARNING)
+            LanRemoteViewModel.instance?.addServerLog(
+                "系统投屏拒绝授权或已被占用: ${e.message}",
+                com.example.ui.LogType.WARNING
+            )
             stopSelf()
             return START_NOT_STICKY
         } catch (e: Throwable) {
             Log.e(TAG, "Error getting MediaProjection: ${e.message}")
-            LanRemoteViewModel.instance?.addServerLog("创建投屏引擎异常: ${e.message}", com.example.ui.LogType.WARNING)
+            LanRemoteViewModel.instance?.addServerLog(
+                "创建投屏引擎异常: ${e.message}",
+                com.example.ui.LogType.WARNING
+            )
             stopSelf()
             return START_NOT_STICKY
         }
@@ -273,16 +308,21 @@ class ScreenCaptureService : Service() {
         LanRemoteViewModel.instance?.onScreenSizeDetermined(width, height)
 
         // 为了极大节约移动端局域网的网络传输带宽开销，将采集宽高整体降级为正常宽高的 0.35 倍，且对齐到 16 字节
-        var captureWidth = (width * 0.35f).toInt()
-        var captureHeight = (height * 0.35f).toInt()
-        captureWidth = (captureWidth / 16) * 16
-        captureHeight = (captureHeight / 16) * 16
-        if (captureWidth <= 0) captureWidth = 360
-        if (captureHeight <= 0) captureHeight = 640
+        var captureWidth = ((width * 0.8).toInt() / 16) * 16
+        var captureHeight = ((height * 0.8).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = 1080
+        if (captureHeight <= 0) captureHeight = 2400
 
         try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, captureWidth, captureHeight)
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            val format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                captureWidth,
+                captureHeight
+            )
+            format.setInteger(
+                MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+            )
             format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000) // 2 Mbps 比特率
             format.setInteger(MediaFormat.KEY_FRAME_RATE, 30) // 30 帧速率 (FPS)
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 秒一个关键帧 (I-Frame)
@@ -293,7 +333,10 @@ class ScreenCaptureService : Service() {
             mediaCodec = codec
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create MediaCodec encoder: ${e.message}")
-            LanRemoteViewModel.instance?.addServerLog("初始化视频编码器失败: ${e.message}", com.example.ui.LogType.WARNING)
+            LanRemoteViewModel.instance?.addServerLog(
+                "初始化视频编码器失败: ${e.message}",
+                com.example.ui.LogType.WARNING
+            )
             stopSelf()
             return
         }
@@ -323,7 +366,10 @@ class ScreenCaptureService : Service() {
         isEncoding = true
         startEncodingLoop()
 
-        LanRemoteViewModel.instance?.addServerLog("投屏引擎并硬件视频编码开启成功", com.example.ui.LogType.SUCCESS)
+        LanRemoteViewModel.instance?.addServerLog(
+            "投屏引擎并硬件视频编码开启成功",
+            com.example.ui.LogType.SUCCESS
+        )
     }
 
     /**
@@ -344,13 +390,17 @@ class ScreenCaptureService : Service() {
                             outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                             val outData = ByteArray(bufferInfo.size)
                             outputBuffer.get(outData)
-                            
+
                             //val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
                             //val flags = bufferInfo.flags
                             //vm?.onEncodedFrameCaptured(base64Data, flags, bufferInfo.presentationTimeUs)
 
                             // 替换为：纯二进制传输，移除 Base64 耗时操作
-                            vm?.onEncodedFrameCaptured(outData, bufferInfo.flags, bufferInfo.presentationTimeUs)
+                            vm?.onEncodedFrameCaptured(
+                                outData,
+                                bufferInfo.flags,
+                                bufferInfo.presentationTimeUs
+                            )
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
@@ -399,17 +449,20 @@ class ScreenCaptureService : Service() {
         try {
             codecThread?.interrupt()
             codecThread = null
-        } catch (ignored: Exception) {}
+        } catch (ignored: Exception) {
+        }
 
         try {
             mediaCodec?.stop()
             mediaCodec?.release()
-        } catch (ignored: Exception) {}
+        } catch (ignored: Exception) {
+        }
         mediaCodec = null
 
         try {
             codecSurface?.release()
-        } catch (ignored: Exception) {}
+        } catch (ignored: Exception) {
+        }
         codecSurface = null
 
         virtualDisplay?.release()
