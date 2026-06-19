@@ -65,33 +65,39 @@ import androidx.compose.ui.node.Ref
  * 该服务允许在不处于前台 activity 的情况下，常驻在系统桌面之上显示 1/2 比例的受控画面，
  * 并支持实时的 TAP 与 SWIPE 反向遥控手势操作注入。
  */
-class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
+class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
+    SavedStateRegistryOwner {
 
     companion object {
-         const val TAG = "FloatingWindowService"
-         
-         /**
-          * 标记后台悬浮窗服务当前是否正在运行
-          */
-         var isRunning = false
+        const val TAG = "FloatingWindowService"
+
+        /**
+         * 标记后台悬浮窗服务当前是否正在运行
+         */
+        var isRunning = false
     }
 
     // 后台生命周期控制器，用于供给 ComposeView 所需的生命周期环境
     private val lifecycleRegistry = LifecycleRegistry(this)
+
     // 页面存储容器，用于托管和追踪 ViewModel 依赖
     private val store = ViewModelStore()
+
     // 已保存状态的注册控制器，供给 Compose 组件树的底层架构环境
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
 
     // 提供生命周期接口实现
     override val lifecycle: Lifecycle get() = lifecycleRegistry
+
     // 提供 ViewModel 存储实现
     override val viewModelStore: ViewModelStore get() = store
+
     // 提供状态存档恢复实现
     override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
 
     // 系统窗口管理员，用于在桌面上层添加/更新/移除全局悬浮窗组件
     private var windowManager: WindowManager? = null
+
     // 自定义的 Jetpack Compose 视图容器，可直接塞入悬浮窗中
     private var floatingView: ComposeView? = null
 
@@ -105,7 +111,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         super.onCreate()
         isRunning = true
         Log.i(TAG, "FloatingWindowService onCreate")
-        
+
         // 激活生命周期状态
         savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
@@ -175,14 +181,21 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
 
                 // 订阅来自 ViewModel 的全局悬浮窗缩放比例 (双向绑定，与主界面 Slider 同步)
                 val scaleMultiplier by viewModel.floatingScaleMultiplier.collectAsState()
-                
+
                 // 触摸锁定状态：为 true 时，支持双指手势缩放窗口；为 false 时，响应远程滑动/点击操作
                 var isTouchLocked by remember { mutableStateOf(false) }
 
                 // 依据远端画布分辨率自动计算宽高纵横比，实现完美的自适应缩放，且高度随宽度弹性拉伸
-                val aspectRatio = if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
+                val aspectRatio =
+                    if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
                 val windowWidthDp = (clientScreenWidthDp / 3f) * scaleMultiplier
                 val windowHeightDp = windowWidthDp * aspectRatio
+
+                Log.d(
+                    "aspectRatio",
+                    "mirroredHeight:" + mirroredHeight + ":" + mirroredWidth + "clientScreenWidthDp:" + clientScreenWidthDp
+                            + ":" + windowWidthDp + windowHeightDp
+                )
 
                 Box(
                     modifier = Modifier
@@ -193,7 +206,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                         .background(Color.Black)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        
+
                         // 顶部操作手柄栏 (高36dp) — 拦截并响应物理手势，使整个悬浮窗在系统桌面上无缝拖拽移动
                         Row(
                             modifier = Modifier
@@ -249,7 +262,9 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = "Toggle Touch Lock for Pinch Sizing",
-                                        tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White.copy(alpha = 0.6f),
+                                        tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White.copy(
+                                            alpha = 0.6f
+                                        ),
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -273,14 +288,15 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                         // 画面显示与控制面板区域
                         Box(
                             modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
+                                .fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
                             val hasFrame = hasFrameReceived
                             if (hasFrame) {
                                 var localViewW by remember { mutableStateOf(1) }
                                 var localViewH by remember { mutableStateOf(1) }
+
+                                //key(videoWidth, videoHeight) {
 
                                 Box(
                                     modifier = Modifier
@@ -289,12 +305,19 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                         .pointerInput(isTouchLocked) {
                                             if (isTouchLocked) {
                                                 detectTransformGestures { _, _, zoom, _ ->
-                                                    val newScale = (scaleMultiplier * zoom).coerceIn(0.4f, 3.0f)
-                                                    viewModel.updateFloatingScaleMultiplier(newScale)
+                                                    val newScale =
+                                                        (scaleMultiplier * zoom).coerceIn(
+                                                            0.4f,
+                                                            3.0f
+                                                        )
+                                                    viewModel.updateFloatingScaleMultiplier(
+                                                        newScale
+                                                    )
                                                 }
                                             }
                                         }
-                                ) {
+                                )
+                                {
                                     VideoSurfaceViewer(
                                         viewModel = viewModel,
                                         modifier = Modifier
@@ -305,7 +328,11 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                                 localViewH = size.height
                                             }
                                             // 监听点击手势 (仅在解锁/未锁定状态下响应反向控制)
-                                            .pointerInput(localViewW, localViewH, isTouchLocked) {
+                                            .pointerInput(
+                                                localViewW,
+                                                localViewH,
+                                                isTouchLocked
+                                            ) {
                                                 if (!isTouchLocked) {
                                                     detectTapGestures(
                                                         onTap = { offset ->
@@ -319,7 +346,11 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                                 }
                                             }
                                             // 监听滑动划扫手势 (仅在解锁/未锁定状态下响应反向控制)
-                                            .pointerInput(localViewW, localViewH, isTouchLocked) {
+                                            .pointerInput(
+                                                localViewW,
+                                                localViewH,
+                                                isTouchLocked
+                                            ) {
                                                 if (!isTouchLocked) {
                                                     var dragStartX = 0f
                                                     var dragStartY = 0f
@@ -334,8 +365,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                                             val currentX = change.position.x
                                                             val currentY = change.position.y
                                                             if (localViewW > 0 && localViewH > 0) {
-                                                                val rsx = dragStartX / localViewW
-                                                                val rsy = dragStartY / localViewH
+                                                                val rsx =
+                                                                    dragStartX / localViewW
+                                                                val rsy =
+                                                                    dragStartY / localViewH
                                                                 val rex = currentX / localViewW
                                                                 val rey = currentY / localViewH
                                                                 viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
@@ -374,6 +407,9 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                                         }
                                     }
                                 }
+
+                                //}
+
                             } else {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
@@ -486,8 +522,13 @@ fun VideoSurfaceViewer(
                 holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) {
                         try {
-                            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
+                            val codec =
+                                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            val format = MediaFormat.createVideoFormat(
+                                MediaFormat.MIMETYPE_VIDEO_AVC,
+                                videoWidth,
+                                videoHeight
+                            )
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
                             decoderRef.value = codec
@@ -501,27 +542,51 @@ fun VideoSurfaceViewer(
                                         if (inputBuffer != null) {
                                             inputBuffer.clear()
                                             inputBuffer.put(configFrame.first)
-                                            codec.queueInputBuffer(inputIndex, 0, configFrame.first.size, configFrame.third, configFrame.second)
-                                            Log.d("VideoSurfaceViewer", "解码器启动时已成功自动填充 SPS/PPS 缓存配置帧, 大小: ${configFrame.first.size}")
+                                            codec.queueInputBuffer(
+                                                inputIndex,
+                                                0,
+                                                configFrame.first.size,
+                                                configFrame.third,
+                                                configFrame.second
+                                            )
+                                            Log.d(
+                                                "VideoSurfaceViewer",
+                                                "解码器启动时已成功自动填充 SPS/PPS 缓存配置帧, 大小: ${configFrame.first.size}"
+                                            )
                                         }
                                     }
                                 } catch (e: Exception) {
-                                    Log.e("VideoSurfaceViewer", "启动注入 SPS/PPS 缓存特征包失败: ${e.message}")
+                                    Log.e(
+                                        "VideoSurfaceViewer",
+                                        "启动注入 SPS/PPS 缓存特征包失败: ${e.message}"
+                                    )
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e("VideoSurfaceViewer", "构建/配置 H.264 解码器实例时报错崩溃: ${e.message}")
+                            Log.e(
+                                "VideoSurfaceViewer",
+                                "构建/配置 H.264 解码器实例时报错崩溃: ${e.message}"
+                            )
                         }
                     }
 
-                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+                    override fun surfaceChanged(
+                        holder: SurfaceHolder,
+                        format: Int,
+                        w: Int,
+                        h: Int
+                    ) {
+                    }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
                         try {
                             decoderRef.value?.stop()
                             decoderRef.value?.release()
                         } catch (e: Exception) {
-                            Log.e("VideoSurfaceViewer", "销毁解码器或回收物理内存失败: ${e.message}")
+                            Log.e(
+                                "VideoSurfaceViewer",
+                                "销毁解码器或回收物理内存失败: ${e.message}"
+                            )
                         }
                         decoderRef.value = null
                     }

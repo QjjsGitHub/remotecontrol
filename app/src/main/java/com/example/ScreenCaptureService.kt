@@ -91,13 +91,96 @@ class ScreenCaptureService : Service() {
                 LanRemoteViewModel.instance?.onScreenSizeDetermined(metrics.widthPixels, metrics.heightPixels)
 
                 // 【核心提示】旋转后，通常需要重启 VirtualDisplay 否则画面会拉伸或黑屏
-                // restartVirtualDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+                restartVirtualDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
             }
         }
         override fun onDisplayAdded(displayId: Int) {}
         override fun onDisplayRemoved(displayId: Int) {}
     }
 
+    /**
+     * 屏幕旋转或分辨率改变时，复用已授权的 MediaProjection 动态重启并重设编码尺寸
+     */
+    /**
+     * 屏幕旋转时，遵守 Android 14+ 规范：
+     * 不重新调用 createVirtualDisplay，而是通过 resize() 和 setSurface() 动态更新目标
+     */
+    private fun restartVirtualDisplay(width: Int, height: Int, density: Int) {
+        if (virtualDisplay == null) return
+
+        // 1. 暂停现有的视频分发循环
+        isEncoding = false
+        try {
+            codecThread?.interrupt()
+            codecThread?.join(500)
+        } catch (e: Exception) {
+            Log.e(TAG, "停止旧编码线程时出现异常: ${e.message}")
+        }
+        codecThread = null
+
+        // 2. 释放旧的 MediaCodec 和 Surface（注意：这里绝对不释放 VirtualDisplay 和 MediaProjection）
+        try {
+            mediaCodec?.stop()
+            mediaCodec?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "释放旧MediaCodec时出现异常: ${e.message}")
+        }
+        mediaCodec = null
+
+        try {
+            codecSurface?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "释放旧Surface时出现异常: ${e.message}")
+        }
+        codecSurface = null
+
+        // 3. 计算旋转后的新录屏分辨率 (对齐到 16 字节)
+        var captureWidth = (width * 0.35f).toInt()
+        var captureHeight = (height * 0.35f).toInt()
+        captureWidth = (captureWidth / 16) * 16
+        captureHeight = (captureHeight / 16) * 16
+        if (captureWidth <= 0) captureWidth = 360
+        if (captureHeight <= 0) captureHeight = 640
+
+        // 4. 使用新分辨率重新创建并配置 MediaCodec
+        try {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, captureWidth, captureHeight)
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+
+            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+
+            // 获取新尺寸的 Surface
+            codecSurface = codec.createInputSurface()
+            mediaCodec = codec
+            codec.start()
+        } catch (e: Exception) {
+            Log.e(TAG, "重建 MediaCodec 编码器失败: ${e.message}")
+            return
+        }
+
+        // 5. 【核心修正】不创建新的 VirtualDisplay，而是更新现有的！
+        try {
+            // 先移除旧的 Surface 避免冲突
+            virtualDisplay?.surface = null
+            // 调整 VirtualDisplay 的物理输出尺寸
+            virtualDisplay?.resize(captureWidth, captureHeight, density)
+            // 绑定新的编码器 Surface
+            virtualDisplay?.surface = codecSurface
+        } catch (e: Exception) {
+            Log.e(TAG, "调整 VirtualDisplay 尺寸失败: ${e.message}")
+            return
+        }
+
+        // 6. 重新启动数据抓取轮询分发线程
+        isEncoding = true
+        startEncodingLoop()
+
+        LanRemoteViewModel.instance?.addServerLog("成功适应屏幕旋转，流媒体分辨率变更为: ${captureWidth}x${captureHeight}", com.example.ui.LogType.SUCCESS)
+    }
 
     /**
      * 服务初始化生命周期
