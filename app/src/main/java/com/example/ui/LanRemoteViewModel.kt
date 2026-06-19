@@ -82,12 +82,15 @@ class LanRemoteViewModel : ViewModel() {
     val hasFrameReceived: StateFlow<Boolean> = _hasFrameReceived.asStateFlow()
 
     // 未合并累积的视频流数据切片热流，提供给悬浮窗底层的 MediaCodec 硬件解码器直接读取
-    private val _encodedFrameFlow = MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 128)
-    val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> = _encodedFrameFlow.asSharedFlow()
+    private val _encodedFrameFlow =
+        MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 128)
+    val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> =
+        _encodedFrameFlow.asSharedFlow()
 
     // 在客户端本地缓存最新的 SPS/PPS 编解码配置帧(标志位=2的配置块)，用于解决解码器启动时初始化屏幕信息的问题
     private val _clientCodecConfig = MutableStateFlow<Triple<ByteArray, Int, Long>?>(null)
-    val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> = _clientCodecConfig.asStateFlow()
+    val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> =
+        _clientCodecConfig.asStateFlow()
 
     // 视频流编码对应的自适应缩减宽度像素
     private val _videoWidth = MutableStateFlow(360)
@@ -123,7 +126,7 @@ class LanRemoteViewModel : ViewModel() {
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
     private var socketClient: SocketClient? = null
-    private var cachedCodecConfig: String? = null
+    private var cachedCodecConfig: ByteArray? = null
 
     init {
         instance = this
@@ -194,19 +197,27 @@ class LanRemoteViewModel : ViewModel() {
                 onClientConnected = { clientIp ->
                     _connectedClients.value = (_connectedClients.value + clientIp).distinct()
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
-                    
+
                     // 新的客户端连接时，立即向其同步当前服务端的坐标尺寸与微缩流画幅大小
-                    var captureWidth = (_serverWidth.value * 0.35f).toInt()
+                    /*var captureWidth = (_serverWidth.value * 0.35f).toInt()
                     var captureHeight = (_serverHeight.value * 0.35f).toInt()
                     captureWidth = (captureWidth / 16) * 16
                     captureHeight = (captureHeight / 16) * 16
                     if (captureWidth <= 0) captureWidth = 360
                     if (captureHeight <= 0) captureHeight = 640
-                    socketServer?.broadcastMessage("SIZE:${_serverWidth.value},${_serverHeight.value},$captureWidth,$captureHeight")
-                    
+
+                    val sizeMsg = "SIZE:$_serverWidth.value,$_serverHeight.value,$captureWidth,$captureHeight".toByteArray(Charsets.UTF_8)
+                    val buffer = java.nio.ByteBuffer.allocate(1 + sizeMsg.size)
+                    buffer.put(3.toByte())
+                    buffer.put(sizeMsg)
+
+                    socketServer?.broadcastData(buffer.array())*/
+
+                    updateScreenSize()
+
                     // 立即将本地缓存的最近一次 SPS/PPS 首配置帧灌送给刚连接进来的客户端使其可以立即初始化解码器
                     cachedCodecConfig?.let { configMsg ->
-                        socketServer?.broadcastMessage(configMsg)
+                        socketServer?.broadcastData(configMsg)
                     }
                 },
                 onClientDisconnected = { clientIp ->
@@ -256,6 +267,10 @@ class LanRemoteViewModel : ViewModel() {
         addServerLog("服务端已安全停止", LogType.WARNING)
     }
 
+    fun updateScreenSize() {
+        onScreenSizeDetermined(_serverWidth.value, _serverHeight.value)
+    }
+
     /**
      * 当收到系统的真实屏幕投射渲染回调，确定当前设备物理采集的长宽像素尺寸
      * @param width 系统屏幕的物理总宽度(像素)
@@ -264,16 +279,32 @@ class LanRemoteViewModel : ViewModel() {
     fun onScreenSizeDetermined(width: Int, height: Int) {
         _serverWidth.value = width
         _serverHeight.value = height
-        
+
+        // 自动判定旋转状态：0 竖屏，1 横屏
+        val rotation = if (width > height) 1 else 0
+
         var captureWidth = (width * 0.35f).toInt()
         var captureHeight = (height * 0.35f).toInt()
         captureWidth = (captureWidth / 16) * 16
         captureHeight = (captureHeight / 16) * 16
         if (captureWidth <= 0) captureWidth = 360
         if (captureHeight <= 0) captureHeight = 640
-        
-        addServerLog("本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight})", LogType.INFO)
-        socketServer?.broadcastMessage("SIZE:$width,$height,$captureWidth,$captureHeight")
+
+        addServerLog(
+            "本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight}), 旋转状态: $rotation",
+            LogType.INFO
+        )
+        //socketServer?.broadcastMessage("SIZE:$width,$height,$captureWidth,$captureHeight")
+
+        // 构造二进制包：1 byte(类型:3代表SIZE) + N bytes(字符串数据)
+        // 修改协议串：增加第五个参数 rotation
+        val sizeMsg =
+            "SIZE:$width,$height,$captureWidth,$captureHeight,$rotation".toByteArray(Charsets.UTF_8)
+        val buffer = java.nio.ByteBuffer.allocate(1 + sizeMsg.size)
+        buffer.put(3.toByte()) // TYPE_SIZE
+        buffer.put(sizeMsg)
+
+        socketServer?.broadcastData(buffer.array()) // 注意这里方法名改为了 broadcastData
     }
 
     /**
@@ -282,12 +313,28 @@ class LanRemoteViewModel : ViewModel() {
      * @param flags 切片标识 flags (例如 Buffer_Flag_Key_Frame)
      * @param presentationTimeUs 帧渲染展示绝对时间(微秒)
      */
-    fun onEncodedFrameCaptured(base64Data: String, flags: Int, presentationTimeUs: Long) {
+    /*fun onEncodedFrameCaptured(base64Data: String, flags: Int, presentationTimeUs: Long) {
         val msg = "H264:$flags:$presentationTimeUs:$base64Data"
         if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
             cachedCodecConfig = msg
         }
         socketServer?.broadcastMessage(msg)
+    }*/
+
+    // 修改方法签名，将 base64Data: String 改为 data: ByteArray
+    fun onEncodedFrameCaptured(data: ByteArray, flags: Int, presentationTimeUs: Long) {
+        // 构造二进制包：1 byte(类型:2代表视频) + 4 bytes(Flags) + 8 bytes(PTS) + N bytes(视频数据)
+        val buffer = java.nio.ByteBuffer.allocate(1 + 4 + 8 + data.size)
+        buffer.put(2.toByte())
+        buffer.putInt(flags)
+        buffer.putLong(presentationTimeUs)
+        buffer.put(data)
+
+        val packet = buffer.array()
+        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            cachedCodecConfig = packet // 缓存 SPS/PPS
+        }
+        socketServer?.broadcastData(packet)
     }
 
     /**
@@ -304,22 +351,29 @@ class LanRemoteViewModel : ViewModel() {
                     if (coords.size == 2) {
                         val rx = coords[0].toFloatOrNull() ?: return
                         val ry = coords[1].toFloatOrNull() ?: return
-                        
+
                         // 将相对百分比映射还原为服务端物理屏幕的大屏精确实际点击像素位置
                         val originalX = rx * _serverWidth.value
                         val originalY = ry * _serverHeight.value
 
                         val injected = RemoteAccessibilityService.performTap(originalX, originalY)
                         if (injected) {
-                            addServerLog("成功模拟点击坐标: (${originalX.toInt()}, ${originalY.toInt()})", LogType.SUCCESS)
+                            addServerLog(
+                                "成功模拟点击坐标: (${originalX.toInt()}, ${originalY.toInt()})",
+                                LogType.SUCCESS
+                            )
                         } else {
-                            addServerLog("模拟点击失败: 辅助功能运行状态 [${RemoteAccessibilityService.isServiceRunning()}]", LogType.WARNING)
+                            addServerLog(
+                                "模拟点击失败: 辅助功能运行状态 [${RemoteAccessibilityService.isServiceRunning()}]",
+                                LogType.WARNING
+                            )
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "解析 TAP 触控命令由于异常崩溃: ${e.message}")
                 }
             }
+
             command.startsWith("SWIPE:") -> {
                 try {
                     val paths = command.substringAfter("SWIPE:").split(";")
@@ -339,7 +393,10 @@ class LanRemoteViewModel : ViewModel() {
 
                             val injected = RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)
                             if (injected) {
-                                addServerLog("成功模拟滑动: (${sx.toInt()}, ${sy.toInt()}) -> (${ex.toInt()}, ${ey.toInt()})", LogType.SUCCESS)
+                                addServerLog(
+                                    "成功模拟滑动: (${sx.toInt()}, ${sy.toInt()}) -> (${ex.toInt()}, ${ey.toInt()})",
+                                    LogType.SUCCESS
+                                )
                             } else {
                                 addServerLog("模拟滑动失败: 轴值映射验证失败", LogType.WARNING)
                             }
@@ -402,7 +459,7 @@ class LanRemoteViewModel : ViewModel() {
      * 处理连接后各类别来自服务端的网络数据事件流(配置帧、数据帧、大屏分辨率参数)
      * @param message 从 TCP 接收到的高帧率字节流 Base64 编码或分辨率 SIZE 头部
      */
-    fun handleReceivedMessage(message: String) {
+    /*fun handleReceivedMessage(message: String) {
         when {
             message.startsWith("H264:") -> {
                 try {
@@ -458,6 +515,55 @@ class LanRemoteViewModel : ViewModel() {
                 }
             }
         }
+    }*/
+
+    fun handleReceivedData(payload: ByteArray) {
+        try {
+            val buffer = java.nio.ByteBuffer.wrap(payload)
+            val type = buffer.get().toInt()
+
+            if (type == 2) { // TYPE_VIDEO：处理视频流
+                val flags = buffer.int
+                val presentationTimeUs = buffer.long
+                val data = ByteArray(buffer.remaining())
+                buffer.get(data)
+
+                val frameTriple = Triple(data, flags, presentationTimeUs)
+                if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                    _clientCodecConfig.value = frameTriple
+                }
+
+                _encodedFrameFlow.tryEmit(frameTriple)
+                _hasFrameReceived.value = true
+
+            } else if (type == 3) { // TYPE_SIZE：处理分辨率配置
+                val msgBytes = ByteArray(buffer.remaining())
+                buffer.get(msgBytes)
+                val message = String(msgBytes, Charsets.UTF_8)
+                if (message.startsWith("SIZE:")) {
+                    val sizes = message.substringAfter("SIZE:").split(",")
+                    if (sizes.size >= 2) {
+                        _mirroredWidth.value = sizes[0].toIntOrNull() ?: 1080
+                        _mirroredHeight.value = sizes[1].toIntOrNull() ?: 2400
+                    }
+                    if (sizes.size >= 4) {
+                        _videoWidth.value = sizes[2].toIntOrNull() ?: 360
+                        _videoHeight.value = sizes[3].toIntOrNull() ?: 640
+                    }
+                    // 解析旋转标志位（如果存在）
+                    if (sizes.size >= 5) {
+                        val rotation = sizes[4].toIntOrNull() ?: 0
+                        addControllerLog(
+                            "同步远端旋转状态: ${if (rotation == 1) "横屏" else "竖屏"}",
+                            LogType.INFO
+                        )
+                        // 你可以在这里额外定义一个 _serverRotation 状态流供 UI 使用
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "解析二进制包失败: ${e.message}")
+        }
     }
 
     /**
@@ -482,15 +588,17 @@ class LanRemoteViewModel : ViewModel() {
                     ConnectionState.Connected -> {
                         addControllerLog("已打通连接，远程画面加载中...", LogType.SUCCESS)
                     }
+
                     ConnectionState.Disconnected -> {
                         addControllerLog("服务端已被断开", LogType.WARNING)
                         _hasFrameReceived.value = false
                     }
+
                     else -> {}
                 }
             },
-            onMessageReceived = { message ->
-                handleReceivedMessage(message)
+            onMessageReceived = { payload ->
+                handleReceivedData(payload)
             }
         )
         socketClient?.connect()

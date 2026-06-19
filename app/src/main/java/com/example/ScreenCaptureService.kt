@@ -23,6 +23,7 @@ import com.example.ui.LanRemoteViewModel
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.view.Display
 import android.view.Surface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,34 @@ class ScreenCaptureService : Service() {
     private var codecThread: Thread? = null
     private var isEncoding = false
 
+
+    private val displayManager by lazy {
+        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+    }
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayChanged(displayId: Int) {
+            // 只有主屏幕变化时才处理
+            if (displayId == Display.DEFAULT_DISPLAY) {
+                val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val metrics = DisplayMetrics()
+                // 获取旋转后的真实物理像素
+                windowManager.defaultDisplay.getRealMetrics(metrics)
+
+                Log.i("ScreenCapture", "检测到屏幕旋转: ${metrics.widthPixels}x${metrics.heightPixels}")
+
+                // 通知 ViewModel 更新宽高并广播给客户端
+                LanRemoteViewModel.instance?.onScreenSizeDetermined(metrics.widthPixels, metrics.heightPixels)
+
+                // 【核心提示】旋转后，通常需要重启 VirtualDisplay 否则画面会拉伸或黑屏
+                // restartVirtualDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+            }
+        }
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+    }
+
+
     /**
      * 服务初始化生命周期
      */
@@ -77,6 +106,11 @@ class ScreenCaptureService : Service() {
         super.onCreate()
         updateRunningState(true)
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
+        displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+
+
+
     }
 
     /**
@@ -180,7 +214,7 @@ class ScreenCaptureService : Service() {
             stopSelf()
             return
         }
-        
+
         // 注册多媒体投影会话生命周期监听拦截回调 (在 Android 14+ 下极为关键，必须注册此监听方可启动渲染采集)
         mediaProjection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
@@ -228,9 +262,12 @@ class ScreenCaptureService : Service() {
                             val outData = ByteArray(bufferInfo.size)
                             outputBuffer.get(outData)
                             
-                            val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
-                            val flags = bufferInfo.flags
-                            vm?.onEncodedFrameCaptured(base64Data, flags, bufferInfo.presentationTimeUs)
+                            //val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
+                            //val flags = bufferInfo.flags
+                            //vm?.onEncodedFrameCaptured(base64Data, flags, bufferInfo.presentationTimeUs)
+
+                            // 替换为：纯二进制传输，移除 Base64 耗时操作
+                            vm?.onEncodedFrameCaptured(outData, bufferInfo.flags, bufferInfo.presentationTimeUs)
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
@@ -280,13 +317,13 @@ class ScreenCaptureService : Service() {
             codecThread?.interrupt()
             codecThread = null
         } catch (ignored: Exception) {}
-        
+
         try {
             mediaCodec?.stop()
             mediaCodec?.release()
         } catch (ignored: Exception) {}
         mediaCodec = null
-        
+
         try {
             codecSurface?.release()
         } catch (ignored: Exception) {}
@@ -295,6 +332,9 @@ class ScreenCaptureService : Service() {
         virtualDisplay?.release()
         mediaProjection?.stop()
         Log.i(TAG, "ScreenCaptureService Stopped")
+
+        displayManager.unregisterDisplayListener(displayListener)
+
         super.onDestroy()
     }
 
