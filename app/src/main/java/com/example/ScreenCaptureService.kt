@@ -4,27 +4,25 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Base64
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
+import android.view.Surface
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.example.ui.LanRemoteViewModel
-import android.media.MediaCodec
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
-import android.view.Display
-import android.view.Surface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,12 +41,6 @@ class ScreenCaptureService : Service() {
         // 使用 StateFlow 实现运行状态的响应式暴露，这样可以在 Jetpack Compose UI 中完美响应
         private val _isServiceRunning = MutableStateFlow(false)
         val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
-
-        /**
-         * 记录后台流式屏幕截取服务是否正在运行的全局标识
-         */
-        val isRunning: Boolean
-            get() = _isServiceRunning.value
 
         /**
          * 更新服务运行状态，能够保证 UI 框架立刻感知到变化
@@ -75,32 +67,46 @@ class ScreenCaptureService : Service() {
 
 
     private val displayManager by lazy {
-        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        getSystemService(DISPLAY_SERVICE) as DisplayManager
     }
 
     private val displayListener = object : DisplayManager.DisplayListener {
+        private var lastDisplayWidth = 0
+        private var lastDisplayHeight = 0
+
         override fun onDisplayChanged(displayId: Int) {
             // 只有主屏幕变化时才处理
             if (displayId == Display.DEFAULT_DISPLAY) {
-                val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
                 val metrics = DisplayMetrics()
                 // 获取旋转后的真实物理像素
                 windowManager.defaultDisplay.getRealMetrics(metrics)
 
+                val currentWidth = metrics.widthPixels
+                val currentHeight = metrics.heightPixels
+
+                // 【核心修复】如果宽和高没有发生实质性变化，说明是同一个旋转周期的多余回调，直接拦截
+                if (currentWidth == lastDisplayWidth && currentHeight == lastDisplayHeight) {
+                    return
+                }
+
+                // 更新记录的宽高
+                lastDisplayWidth = currentWidth
+                lastDisplayHeight = currentHeight
+
                 Log.i(
                     "ScreenCapture",
-                    "检测到屏幕旋转: ${metrics.widthPixels}x${metrics.heightPixels}"
+                    "检测到屏幕旋转且尺寸改变: ${currentWidth}x${currentHeight}"
                 )
 
-                //todo zouleliangci
                 // 通知 ViewModel 更新宽高并广播给客户端
                 LanRemoteViewModel.instance?.onScreenSizeDetermined(
-                    metrics.widthPixels,
-                    metrics.heightPixels
+                    currentWidth,
+                    currentHeight
                 )
 
-                // 【核心提示】旋转后，通常需要重启 VirtualDisplay 否则画面会拉伸或黑屏
-                restartVirtualDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+                // 现在这里只会在真正旋转完成时执行一次
+                restartVirtualDisplay(currentWidth, currentHeight, metrics.densityDpi)
             }
         }
 
@@ -207,7 +213,7 @@ class ScreenCaptureService : Service() {
         super.onCreate()
         updateRunningState(true)
         mediaProjectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
 
@@ -240,11 +246,11 @@ class ScreenCaptureService : Service() {
                 intent?.getParcelableExtra("DATA", Intent::class.java)
             } else {
                 @Suppress("DEPRECATION")
-                intent?.getParcelableExtra<Intent>("DATA")
+                intent?.getParcelableExtra("DATA")
             }
-        } catch (e: Throwable) {
+        } catch (_: Throwable) {
             @Suppress("DEPRECATION")
-            intent?.getParcelableExtra<Intent>("DATA")
+            intent?.getParcelableExtra("DATA")
         }
 
         // 验证系统的屏幕投射许可结果是否已经被正常授予
@@ -293,10 +299,10 @@ class ScreenCaptureService : Service() {
     }
 
     /**
-     * 配置屏幕采集参数并注册底层帧监听，开启流畅的渲染循环机制
+     * 配置屏幕采集参数并注册底层帧监听，开启流畅地渲染循环机制
      */
     private fun setupScreenCapture() {
-        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(metrics)
@@ -423,7 +429,7 @@ class ScreenCaptureService : Service() {
             ).apply {
                 description = "正在后台捕获并发送屏幕数据流"
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
     }
@@ -435,7 +441,7 @@ class ScreenCaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("屏幕共享共控服务运作中")
             .setContentText("服务端正在同步录屏画面并等待接收触摸控制指令")
-            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .build()
     }
@@ -449,19 +455,19 @@ class ScreenCaptureService : Service() {
         try {
             codecThread?.interrupt()
             codecThread = null
-        } catch (ignored: Exception) {
+        } catch (_: Exception) {
         }
 
         try {
             mediaCodec?.stop()
             mediaCodec?.release()
-        } catch (ignored: Exception) {
+        } catch (_: Exception) {
         }
         mediaCodec = null
 
         try {
             codecSurface?.release()
-        } catch (ignored: Exception) {
+        } catch (_: Exception) {
         }
         codecSurface = null
 

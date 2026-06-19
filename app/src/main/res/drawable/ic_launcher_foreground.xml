@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Outer Active Wifi Signal Waves -->
+    <!-- Outer Active Wi-Fi Signal Waves -->
     <path
         android:pathData="M34,44 C42,32 66,32 74,44"
         android:strokeWidth="4"

@@ -1,64 +1,81 @@
 package com.example
 
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.media.MediaCodec
+import android.media.MediaFormat
 import android.os.Build
 import android.os.IBinder
-import android.view.Gravity
-import android.view.WindowManager
 import android.util.Log
+import android.view.Gravity
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.node.Ref
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import com.example.ui.LanRemoteViewModel
 import com.example.network.ConnectionState
+import com.example.ui.LanRemoteViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import androidx.lifecycle.lifecycleScope
-import android.media.MediaCodec
-import android.media.MediaFormat
-import android.view.SurfaceHolder
-import android.view.SurfaceView
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.node.Ref
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
@@ -119,7 +136,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
         // 绑定窗口管理员并创建浮空视窗
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         setupFloatingWindow()
 
         // 监听对端的连接存活状态 —— 一旦网络断开或宿主关闭，自动销毁悬浮窗服务确保系统纯净
@@ -139,11 +156,27 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
     private fun setupFloatingWindow() {
         val context = this
         val wm = windowManager ?: return
+        val viewModel = LanRemoteViewModel.instance
+
+        // 1. 在初始化阶段预先计算出正确地悬浮窗起始尺寸，避免 WRAP_CONTENT 导致的首次显示闪烁或 320dp 限制
+        val density = context.resources.displayMetrics.density
+        val config = context.resources.configuration
+        val screenWidthDp = config.screenWidthDp.toFloat()
+
+        // 获取当前已有的同步状态
+        val initialScale = viewModel?.floatingScaleMultiplier?.value ?: 0.3f
+        val mirroredW = viewModel?.mirroredWidth?.value ?: 1080
+        val mirroredH = viewModel?.mirroredHeight?.value ?: 2400
+
+        // 依据纵横比计算初始像素宽高
+        val aspectRatio = if (mirroredW > 0) mirroredH.toFloat() / mirroredW.toFloat() else 16f / 9f
+        val initialWidthPx = (screenWidthDp * initialScale * density).toInt()
+        val initialHeightPx = ((screenWidthDp * initialScale * aspectRatio + 24) * density).toInt()
 
         // 设定系统悬浮窗的核心布局配置参数
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            initialWidthPx,
+            initialHeightPx,
             // 兼容性适配：Android 8.0以上版本必须使用 TYPE_APPLICATION_OVERLAY 悬浮窗类型
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -151,8 +184,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
-            // 设定无焦点属性 FLAG_NOT_FOCUSABLE (不拦截后面桌面的输入法，并保证悬浮窗可点击)，以及在屏内布局
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            // 设定无焦点属性 FLAG_NOT_FOCUSABLE，以及允许布局超出屏幕限制 (FLAG_LAYOUT_NO_LIMITS) 从而支持超大缩放
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -191,16 +226,34 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 val windowWidthDp = clientScreenWidthDp * scaleMultiplier
                 val windowHeightDp = windowWidthDp * aspectRatio
 
-                Log.d(
-                    "aspectRatio",
-                    "mirroredHeight:" + mirroredHeight + ":" + mirroredWidth + "clientScreenWidthDp:" + clientScreenWidthDp
-                            + ":" + windowWidthDp + windowHeightDp
-                )
+                // 强制将 Compose 计算出的 DP 尺寸同步给系统 WindowManager 的 LayoutParams，
+                // 从而绕过 WRAP_CONTENT 可能存在的 320dp 或屏幕边界测量限制。
+                LaunchedEffect(windowWidthDp, windowHeightDp) {
+                    val density = context.resources.displayMetrics.density
+                    val targetWidthPx = (windowWidthDp * density).toInt()
+                    val targetHeightPx = ((windowHeightDp + 24) * density).toInt()
+
+                    // 只有当目标像素尺寸与当前 WindowManager Params 中的尺寸不符时，才触发更新
+                    if (params.width != targetWidthPx || params.height != targetHeightPx) {
+                        params.width = targetWidthPx
+                        params.height = targetHeightPx
+                        try {
+                            wm.updateViewLayout(composeView, params)
+                            Log.d(
+                                TAG,
+                                "WindowManager layout updated to: ${params.width}x${params.height}"
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Update window layout failed: ${e.message}")
+                        }
+                    } else {
+                        Log.d(TAG, "Dimensions unchanged, skipping redundant updateViewLayout")
+                    }
+                }
 
                 Box(
                     modifier = Modifier
-                        .width(windowWidthDp.dp)
-                        .height((windowHeightDp + 24).dp)
+                        .fillMaxSize()
                         .clip(RoundedCornerShape(16.dp))
                         .border(2.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
                         .background(Color.Black)
@@ -293,7 +346,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                         ) {
                             val hasFrame = hasFrameReceived
                             if (hasFrame) {
-                                var localViewW by remember { mutableStateOf(1) }
+                                var localViewW by remember { mutableIntStateOf(1) }
                                 var localViewH by remember { mutableStateOf(1) }
 
                                 //key(videoWidth, videoHeight) {
@@ -487,7 +540,7 @@ fun VideoSurfaceViewer(
         viewModel.encodedFrameFlow.collect { frameInfo ->
             var codec = decoderRef.value
             while (codec == null) {
-                delay(50)
+                delay(50.milliseconds)
                 codec = decoderRef.value
             }
             val bytes = frameInfo.first

@@ -3,7 +3,6 @@ package com.example
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
@@ -29,16 +28,13 @@ class RemoteAccessibilityService : AccessibilityService() {
                 Log.w(TAG, "无法执行点击：辅助服务未启用或未处于运行状态")
                 return false
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val path = Path()
-                path.moveTo(x, y)
-                // 模拟耗时 50 毫秒的单点轻刷，达成点击效果
-                val stroke = GestureDescription.StrokeDescription(path, 0, 50)
-                val builder = GestureDescription.Builder()
-                builder.addStroke(stroke)
-                return inst.dispatchGesture(builder.build(), null, null)
-            }
-            return false
+            val path = Path()
+            path.moveTo(x, y)
+            // 模拟耗时 50 毫秒的单点轻刷，达成点击效果
+            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+            val builder = GestureDescription.Builder()
+            builder.addStroke(stroke)
+            return inst.dispatchGesture(builder.build(), null, null)
         }
 
         /**
@@ -56,16 +52,13 @@ class RemoteAccessibilityService : AccessibilityService() {
                 Log.w(TAG, "无法执行滑动：辅助服务未启用或未处于运行状态")
                 return false
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val path = Path()
-                path.moveTo(startX, startY)
-                path.lineTo(endX, endY)
-                val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-                val builder = GestureDescription.Builder()
-                builder.addStroke(stroke)
-                return inst.dispatchGesture(builder.build(), null, null)
-            }
-            return false
+            val path = Path()
+            path.moveTo(startX, startY)
+            path.lineTo(endX, endY)
+            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+            val builder = GestureDescription.Builder()
+            builder.addStroke(stroke)
+            return inst.dispatchGesture(builder.build(), null, null)
         }
 
         /**

@@ -1,14 +1,23 @@
 package com.example.network
 
 import android.util.Log
-import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.io.PrintWriter
-import java.net.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 远程连接的网络状态枚举
@@ -28,7 +37,7 @@ enum class ConnectionState {
  * 同时向已连接的控制端实时广播当前屏幕录屏得到的视频数据编码切片。
  *
  * @property port 服务端监听的本地TCP端口号，默认9292
- * @property onClientConnected 当有新的控制端(客户端)通过TCP连接进来时的回调函数，入参为客户端IP地址
+ * @property onClientConnected 当有新地控制端(客户端)通过TCP连接进来时的回调函数，入参为客户端IP地址
  * @property onClientDisconnected 当有控制端(客户端)连接断开时的回调函数，入参为客户端IP地址
  * @property onCommandReceived 当收到控制端发送过来的控制指令时的回调函数，入参分别为客户端IP和对应的指令文本
  */
@@ -456,7 +465,7 @@ class UdpBroadcaster(
                 )
                 while (isRunning) {
                     socket?.send(packet)
-                    delay(2000) // 每两秒向全网投递一次自身节点标识
+                    delay(2000.milliseconds) // 每两秒向全网投递一次自身节点标识
                 }
             } catch (e: Exception) {
                 Log.e("UdpBroadcaster", "广播群发捕获异常: ${e.message}")

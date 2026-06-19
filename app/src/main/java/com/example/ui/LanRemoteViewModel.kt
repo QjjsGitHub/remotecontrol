@@ -2,23 +2,31 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
-import android.util.Base64
+import android.media.MediaCodec
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.RemoteAccessibilityService
 import com.example.ScreenCaptureService
-import com.example.network.*
-import android.media.MediaCodec
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import com.example.network.ConnectionState
+import com.example.network.SocketClient
+import com.example.network.SocketServer
+import com.example.network.UdpBroadcaster
+import com.example.network.UdpListener
+import com.example.network.getLocalIpAddress
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 enum class LogType {
     INFO,
@@ -101,13 +109,13 @@ class LanRemoteViewModel : ViewModel() {
     val mirroredHeight: StateFlow<Int> = _mirroredHeight.asStateFlow()
 
     // 悬浮窗的缩放比例状态流，默认设为 1.0f (基准为客户端屏幕宽度的 1/3)
-    // 使得 MainActivity 的 Slider 控制可直接与 FloatingWindowService 悬浮窗口保持实时、双向的同步适配
+    // 使得 MainActivity 的 Slider 控制可直接与 FloatingWindowService 悬浮窗口保持实时、双向地同步适配
     private val _floatingScaleMultiplier = MutableStateFlow(0.3f)
     val floatingScaleMultiplier: StateFlow<Float> = _floatingScaleMultiplier.asStateFlow()
 
     /**
      * 更新全局悬浮窗的缩放比例
-     * @param value 新的缩放比例值
+     * @param value 新地缩放比例值
      */
     fun updateFloatingScaleMultiplier(value: Float) {
         _floatingScaleMultiplier.value = value

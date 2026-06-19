@@ -1,8 +1,7 @@
 package com.example
 
-import android.app.Activity
-import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -16,7 +15,21 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -24,30 +37,52 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
-
-import android.content.pm.PackageManager
+import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : ComponentActivity() {
 
@@ -68,7 +103,7 @@ class MainActivity : ComponentActivity() {
     private val recordResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+        if (result.resultCode == RESULT_OK && result.data != null) {
             // 在用户授权捕获屏幕后，将相关 token 数据下发至 ScreenCaptureService 并启动前台录屏进程
             val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                 putExtra("RESULT_CODE", result.resultCode)
@@ -92,7 +127,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         mediaProjectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         // 如果运行在 Android 13 (Tiramisu) 级别以上的系统，检查并动态请求 POST_NOTIFICATIONS 推送通知权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -129,7 +164,6 @@ fun SimplifiedDashboardScreen(
     // 数据状态流的双向绑定订阅
     val isServerRunning by viewModel.isServerRunning.collectAsState()
     val serverIp by viewModel.serverIp.collectAsState()
-    val connectedClients by viewModel.connectedClients.collectAsState()
     val serverLogs by viewModel.serverLogs.collectAsState()
 
     val connectionState by viewModel.connectionState.collectAsState()
@@ -142,7 +176,7 @@ fun SimplifiedDashboardScreen(
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
-    var activeLogTab by remember { mutableStateOf(0) } // 0 = 服务端日志, 1 = 客户端日志
+    var activeLogTab by remember { mutableIntStateOf(0) } // 0 = 服务端日志, 1 = 客户端日志
 
     var isBgOverlayActive by remember { mutableStateOf(false) }
 
@@ -151,7 +185,7 @@ fun SimplifiedDashboardScreen(
         while (true) {
             isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
             isBgOverlayActive = FloatingWindowService.isRunning
-            delay(1500)
+            delay(1500.milliseconds)
         }
     }
 
@@ -172,7 +206,7 @@ fun SimplifiedDashboardScreen(
                 ).show()
                 val intent = Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    android.net.Uri.parse("package:${context.packageName}")
+                    "package:${context.packageName}".toUri()
                 )
                 context.startActivity(intent)
             }
@@ -203,7 +237,7 @@ fun SimplifiedDashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 采用一站式带安全间距的滚动渲染布局容器
+            // 采用了一站式带安全间距的滚动渲染布局容器
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -482,7 +516,7 @@ fun SimplifiedDashboardScreen(
                                                 "请在系统页面找到「屏幕共控」服务并启用权限",
                                                 Toast.LENGTH_LONG
                                             ).show()
-                                        } catch (e: Exception) {
+                                        } catch (_: Exception) {
                                             Toast.makeText(
                                                 context,
                                                 "跳转失败，请到系统设置开启无障碍",
@@ -705,15 +739,15 @@ fun SimplifiedDashboardScreen(
                                         context.stopService(serviceIntent)
                                         isBgOverlayActive = false
                                     } else {
-                                        if (!android.provider.Settings.canDrawOverlays(context)) {
+                                        if (!Settings.canDrawOverlays(context)) {
                                             Toast.makeText(
                                                 context,
                                                 "请先授予：显示在其他应用上层 (悬浮窗权限)",
                                                 Toast.LENGTH_LONG
                                             ).show()
                                             val intent = Intent(
-                                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                android.net.Uri.parse("package:${context.packageName}")
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                "package:${context.packageName}".toUri()
                                             )
                                             context.startActivity(intent)
                                         } else {
@@ -737,7 +771,7 @@ fun SimplifiedDashboardScreen(
                                     horizontalArrangement = Arrangement.Center
                                 ) {
                                     Icon(
-                                        imageVector = if (isBgOverlayActive) androidx.compose.material.icons.Icons.Default.Close else androidx.compose.material.icons.Icons.Default.Share,
+                                        imageVector = if (isBgOverlayActive) Icons.Default.Close else Icons.Default.Share,
                                         contentDescription = "Background Floating Window Toggle",
                                         modifier = Modifier.size(18.dp)
                                     )
