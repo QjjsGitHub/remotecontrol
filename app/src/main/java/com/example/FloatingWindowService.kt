@@ -284,13 +284,6 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Menu,
-                                    contentDescription = "Drag Window",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (isTouchLocked) "尺缩调节中 (${(scaleMultiplier * 100).toInt()}%)" else "后台控屏中 (${(scaleMultiplier * 100).toInt()}%)",
                                     color = Color.White,
