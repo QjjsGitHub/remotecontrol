@@ -71,6 +71,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -365,141 +366,139 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                             contentAlignment = Alignment.Center
                         ) {
                             if (hasFrameReceived) {
+
+                                // 【优化】移除冗余 key，将重置逻辑收拢到 VideoSurfaceViewer 内部
                                 var localViewW by remember { mutableIntStateOf(1) }
                                 var localViewH by remember { mutableIntStateOf(1) }
 
-                                // 【关键修复点】使用 connectionState 作为 key 强制重置生命周期
-                                androidx.compose.runtime.key(connectionState) {
-                                    // 【核心唤醒逻辑】组件挂载后延迟捅一下 WindowManager，确保 SurfaceView 被系统激活触发 surfaceCreated
-                                    LaunchedEffect(Unit) {
-                                        kotlinx.coroutines.delay(100.milliseconds)
-                                        try {
-                                            wm.updateViewLayout(composeView, params)
-                                        } catch (_: Exception) {
-                                        }
-                                    }
-
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            // 监听双指手势缩放画面（仅在触摸锁定状态下生效，并更新全局 ViewModel 比例使与 Slider 同步）
-                                            .pointerInput(isTouchLocked) {
-                                                if (isTouchLocked) {
-                                                    detectTransformGestures { _, _, zoom, _ ->
-                                                        val newScale =
-                                                            (scaleMultiplier * zoom).coerceIn(
-                                                                0.2f,
-                                                                0.8f
-                                                            )
-                                                        viewModel.updateFloatingScaleMultiplier(
-                                                            newScale
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        // 监听双指手势缩放画面（仅在触摸锁定状态下生效，并更新全局 ViewModel 比例使与 Slider 同步）
+                                        .pointerInput(isTouchLocked) {
+                                            if (isTouchLocked) {
+                                                detectTransformGestures { _, _, zoom, _ ->
+                                                    val newScale =
+                                                        (scaleMultiplier * zoom).coerceIn(
+                                                            0.2f,
+                                                            0.8f
                                                         )
-                                                    }
+                                                    viewModel.updateFloatingScaleMultiplier(
+                                                        newScale
+                                                    )
                                                 }
                                             }
+                                        }
+                                )
+                                {
+                                    VideoSurfaceViewer(
+                                        viewModel = viewModel,
+                                        onSurfaceCreatedPoke = {
+                                            // 【核心唤醒逻辑】组件挂载后延迟捅一下 WindowManager，确保 SurfaceView 被系统激活
+                                            try {
+                                                //delay(120.milliseconds)
+                                                wm.updateViewLayout(composeView, params)
+                                            } catch (_: Exception) {
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .onSizeChanged { size ->
+                                                // 记录并缓存当前悬浮窗真实的物理显示宽高
+                                                localViewW = size.width
+                                                localViewH = size.height
+                                            }
+                                            // 监听手势 (全手势支持 + 60FPS 滑动节流)
+                                            .pointerInput(
+                                                localViewW,
+                                                localViewH,
+                                                isTouchLocked
+                                            ) {
+                                                if (isTouchLocked || localViewW <= 0 || localViewH <= 0) return@pointerInput
+
+                                                val viewW = localViewW.toFloat()
+                                                val viewH = localViewH.toFloat()
+
+                                                // 用于 60FPS 节流的变量 (1000ms / 60 ≈ 16ms)
+                                                var lastMoveTime = 0L
+                                                val frameInterval = 16L
+
+                                                kotlinx.coroutines.coroutineScope {
+                                                    // 1. 处理 Tap, DoubleTap, LongPress, Press
+                                                    launch {
+                                                        detectTapGestures(
+                                                            onTap = { offset ->
+                                                                Log.d(TAG, "Gesture: Tap at $offset")
+                                                                viewModel.sendClientAction("TAP:${offset.x / viewW},${offset.y / viewH}")
+                                                            },
+                                                            onDoubleTap = { offset ->
+                                                                Log.d(TAG, "Gesture: DoubleTap at $offset")
+                                                                viewModel.sendClientAction("DOUBLE_TAP:${offset.x / viewW},${offset.y / viewH}")
+                                                            },
+                                                            onLongPress = { offset ->
+                                                                Log.d(TAG, "Gesture: LongPress at $offset")
+                                                                viewModel.sendClientAction("LONG_PRESS:${offset.x / viewW},${offset.y / viewH}")
+                                                            }
+                                                        )
+                                                    }
+
+                                                    // 2. 处理 Drag (滑动) 并进行 60FPS 节流
+                                                    launch {
+                                                        detectDragGestures(
+                                                            onDragStart = { offset ->
+                                                                Log.d(TAG, "Gesture: DragStart at $offset")
+                                                                viewModel.sendClientAction("DOWN:${offset.x / viewW},${offset.y / viewH}")
+                                                            },
+                                                            onDragEnd = {
+                                                                Log.d(TAG, "Gesture: DragEnd")
+                                                                viewModel.sendClientAction("UP:0,0")
+                                                            },
+                                                            onDragCancel = {
+                                                                Log.d(TAG, "Gesture: DragCancel")
+                                                                viewModel.sendClientAction("UP:0,0")
+                                                            },
+                                                            onDrag = { change, _ ->
+                                                                change.consume()
+                                                                val currentTime = System.currentTimeMillis()
+                                                                // 60FPS 节流逻辑：如果距离上次发送不足 16ms，则跳过本次发送
+                                                                if (currentTime - lastMoveTime >= frameInterval) {
+                                                                    val rx = change.position.x / viewW
+                                                                    val ry = change.position.y / viewH
+                                                                    Log.v(TAG, "Gesture: Move to ($rx, $ry)")
+                                                                    viewModel.sendClientAction("MOVE:$rx,$ry")
+                                                                    lastMoveTime = currentTime
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                             }
+                                            }
                                     )
-                                    {
-                                        VideoSurfaceViewer(
-                                            viewModel = viewModel,
+
+                                    // 锁定状态下的半透明遮罩与手势提示 HUD
+                                    if (isTouchLocked) {
+                                        Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .onSizeChanged { size ->
-                                                    // 记录并缓存当前悬浮窗真实的物理显示宽高
-                                                    localViewW = size.width
-                                                    localViewH = size.height
-                                                }
-                                                // 监听手势 (全手势支持 + 60FPS 滑动节流)
-                                                .pointerInput(
-                                                    localViewW,
-                                                    localViewH,
-                                                    isTouchLocked
-                                                ) {
-                                                    if (isTouchLocked || localViewW <= 0 || localViewH <= 0) return@pointerInput
-
-                                                    val viewW = localViewW.toFloat()
-                                                    val viewH = localViewH.toFloat()
-
-                                                    // 用于 60FPS 节流的变量 (1000ms / 60 ≈ 16ms)
-                                                    var lastMoveTime = 0L
-                                                    val frameInterval = 16L
-
-                                                    kotlinx.coroutines.coroutineScope {
-                                                        // 1. 处理 Tap, DoubleTap, LongPress, Press
-                                                        launch {
-                                                            detectTapGestures(
-                                                                onTap = { offset ->
-                                                                    Log.d(TAG, "Gesture: Tap at $offset")
-                                                                    viewModel.sendClientAction("TAP:${offset.x / viewW},${offset.y / viewH}")
-                                                                },
-                                                                onDoubleTap = { offset ->
-                                                                    Log.d(TAG, "Gesture: DoubleTap at $offset")
-                                                                    viewModel.sendClientAction("DOUBLE_TAP:${offset.x / viewW},${offset.y / viewH}")
-                                                                },
-                                                                onLongPress = { offset ->
-                                                                    Log.d(TAG, "Gesture: LongPress at $offset")
-                                                                    viewModel.sendClientAction("LONG_PRESS:${offset.x / viewW},${offset.y / viewH}")
-                                                                }
-                                                            )
-                                                        }
-
-                                                        // 2. 处理 Drag (滑动) 并进行 60FPS 节流
-                                                        launch {
-                                                            detectDragGestures(
-                                                                onDragStart = { offset ->
-                                                                    Log.d(TAG, "Gesture: DragStart at $offset")
-                                                                    viewModel.sendClientAction("DOWN:${offset.x / viewW},${offset.y / viewH}")
-                                                                },
-                                                                onDragEnd = {
-                                                                    Log.d(TAG, "Gesture: DragEnd")
-                                                                    viewModel.sendClientAction("UP:0,0")
-                                                                },
-                                                                onDragCancel = {
-                                                                    Log.d(TAG, "Gesture: DragCancel")
-                                                                    viewModel.sendClientAction("UP:0,0")
-                                                                },
-                                                                onDrag = { change, _ ->
-                                                                    change.consume()
-                                                                    val currentTime = System.currentTimeMillis()
-                                                                    // 60FPS 节流逻辑：如果距离上次发送不足 16ms，则跳过本次发送
-                                                                    if (currentTime - lastMoveTime >= frameInterval) {
-                                                                        val rx = change.position.x / viewW
-                                                                        val ry = change.position.y / viewH
-                                                                        Log.v(TAG, "Gesture: Move to ($rx, $ry)")
-                                                                        viewModel.sendClientAction("MOVE:$rx,$ry")
-                                                                        lastMoveTime = currentTime
-                                                                    }
-                                                                }
-                                                            )
-                                                        }
-                                                 }
-                                                }
-                                        )
-
-                                        // 锁定状态下的半透明遮罩与手势提示 HUD
-                                        if (isTouchLocked) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(Color.Black.copy(alpha = 0.45f)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Lock,
-                                                        contentDescription = "Pinch to zoom mode active",
-                                                        tint = Color(0xFFFF5252),
-                                                        modifier = Modifier.size(24.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.height(6.dp))
-                                                    Text(
-                                                        text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
-                                                        color = Color.White,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        textAlign = TextAlign.Center,
-                                                        lineHeight = 14.sp
-                                                    )
-                                                }
+                                                .background(Color.Black.copy(alpha = 0.45f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Lock,
+                                                    contentDescription = "Pinch to zoom mode active",
+                                                    tint = Color(0xFFFF5252),
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(
+                                                    text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = TextAlign.Center,
+                                                    lineHeight = 14.sp
+                                                )
                                             }
                                         }
                                     }
@@ -570,23 +569,40 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
  * 将接收自服务端的 H.264 编码切片帧流高速还原绘制到手机悬浮窗上。
  *
  * @param viewModel 被订阅的共控核心业务 ViewModel 实例 [LanRemoteViewModel]
+ * @param onSurfaceCreatedPoke 唤醒回调，用于捅一下 WindowManager 激活 SurfaceView
  * @param modifier 界面样式修饰 Modifier
  */
 @Composable
 fun VideoSurfaceViewer(
     viewModel: LanRemoteViewModel,
+    onSurfaceCreatedPoke: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val videoWidth by viewModel.mirroredWidth.collectAsState()
     val videoHeight by viewModel.mirroredHeight.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
 
-    // 【关键修复点】当分辨率变化时，通过 key 强制重组整个组件，确保解码器重建
-    androidx.compose.runtime.key(videoWidth, videoHeight) {
+    // 【核心重构】合并所有敏感 Key（分辨率+连接状态）。任何一个变化都会重启解码器和唤醒逻辑。
+    androidx.compose.runtime.key(videoWidth, videoHeight, connectionState) {
+        val tag = FloatingWindowService.TAG
+        Log.d(tag, "VideoSurfaceViewer: Key Block Re-entered (W=$videoWidth, H=$videoHeight, State=$connectionState)")
+
         // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
-        var decoderToken by remember { mutableIntStateOf(0) }
+        var decoderToken by remember {
+            Log.d(tag, "VideoSurfaceViewer: State Reset (New Decoder Token)")
+            mutableIntStateOf(0)
+        }
         var decoder by remember { mutableStateOf<MediaCodec?>(null) }
 
+        // 当解码环境（Key）发生变化时，延迟执行唤醒逻辑
+        LaunchedEffect(Unit) {
+            Log.d(tag, "VideoSurfaceViewer: LaunchedEffect(Unit) - Poking WindowManager")
+            delay(200.milliseconds)
+            onSurfaceCreatedPoke()
+        }
+
         LaunchedEffect(viewModel, decoderToken) {
+            Log.d(tag, "VideoSurfaceViewer: LaunchedEffect(Decoder) - Starting Frame Flow (Token=$decoderToken)")
             val codec = decoder ?: return@LaunchedEffect
             viewModel.encodedFrameFlow.collect { frameInfo ->
                 val bytes = frameInfo.first
