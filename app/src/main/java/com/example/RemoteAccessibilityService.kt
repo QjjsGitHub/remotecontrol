@@ -30,6 +30,31 @@ class RemoteAccessibilityService : AccessibilityService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+        // 用于处理连续手势的状态变量
+        private var lastX = 0f
+        private var lastY = 0f
+        private var isDragging = false
+
+        fun handleTouchDown(x: Float, y: Float) {
+            lastX = x
+            lastY = y
+            isDragging = true
+            // 发送一个极短的滑动或者点击来启动触摸
+            performTap(x, y)
+        }
+
+        fun handleTouchMove(x: Float, y: Float) {
+            if (!isDragging) return
+            // 使用极短时间 (10ms) 的滑动来模拟实时拖动
+            performSwipe(lastX, lastY, x, y, 10)
+            lastX = x
+            lastY = y
+        }
+
+        fun handleTouchUp() {
+            isDragging = false
+        }
+
 
         /**
          * 在屏幕的全局指定坐标处模拟单点轻触(点击)操作

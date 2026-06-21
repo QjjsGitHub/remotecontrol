@@ -106,6 +106,7 @@ class SocketServer(
                     val inputStream = java.io.DataInputStream(socket.getInputStream())
                     while (isRunning) {
                         val length = inputStream.readInt()
+                        Log.d("手势", "length：$length")
                         if (length in 1..NetworkConstants.MAX_PACKET_SIZE) {
                             val payload = ByteArray(length)
                             inputStream.readFully(payload)
@@ -115,6 +116,7 @@ class SocketServer(
                             }
                         } else {
                             onError("客户端 [$clientIp] 发送异常大小的数据包: $length 字节")
+                            // 核心：一旦流污染（出现异常长度），必须断开连接重新对齐
                             disconnect()
                         }
                     }
@@ -201,6 +203,9 @@ class SocketClient(
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // 核心改进：使用 Channel 序列化指令发送，防止并发写入导致 TCP 流污染
+    private val commandChannel = kotlinx.coroutines.channels.Channel<String>(capacity = 64)
+
     fun connect() {
         if (isRunning) return
         isRunning = true
@@ -215,6 +220,23 @@ class SocketClient(
                 )
                 socket = targetSocket
                 outputStream = java.io.DataOutputStream(targetSocket.getOutputStream())
+
+                // 【关键】启动专门的写协程，保证同一时间只有一个协程在操作 OutputStream
+                launch(Dispatchers.IO) {
+                    try {
+                        for (command in commandChannel) {
+                            val out = outputStream ?: break
+                            val bytes = command.toByteArray(Charsets.UTF_8)
+                            out.writeInt(bytes.size)
+                            out.write(bytes)
+                            out.flush()
+                        }
+                    } catch (e: Exception) {
+                        if (isRunning) onError("发送指令流中断: ${e.message}")
+                    } finally {
+                        disconnectInternal()
+                    }
+                }
 
                 withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Connected) }
                 Log.i(TAG, "已成功连接到服务端: $serverIp:$port")
@@ -248,23 +270,13 @@ class SocketClient(
         }
     }
 
-    // 客户端发送控制指令依然可以是 String，但底层包装成二进制包发送
-    // 1. 改为 suspend 函数，移除 scope.launch
-    suspend fun sendCommand(command: String): Boolean = withContext(Dispatchers.IO) {
-        val out = outputStream
-        if (out != null && socket?.isConnected == true) {
-            try {
-                val bytes = command.toByteArray(Charsets.UTF_8)
-                out.writeInt(bytes.size)
-                out.write(bytes)
-                out.flush()
-                true
-            } catch (e: Exception) {
-                onError("指令发送失败: ${e.message}")
-                false
-            }
-        } else {
-            false
+    /**
+     * 向服务端发送控制指令。
+     * 采用非阻塞的 Channel 模型，确保高频手势下指令顺序发送且不发生字节重叠。
+     */
+    fun sendCommand(command: String) {
+        if (isRunning && socket?.isConnected == true) {
+            commandChannel.trySend(command)
         }
     }
 

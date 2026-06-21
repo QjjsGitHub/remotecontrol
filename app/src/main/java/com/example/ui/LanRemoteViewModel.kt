@@ -319,7 +319,10 @@ class LanRemoteViewModel : ViewModel() {
     /**
      * 高效处理视频帧捕获（直接处理 ByteBuffer 减少内存分配）
      */
-    fun onEncodedFrameCaptured(codecBuffer: java.nio.ByteBuffer, bufferInfo: android.media.MediaCodec.BufferInfo) {
+    fun onEncodedFrameCaptured(
+        codecBuffer: java.nio.ByteBuffer,
+        bufferInfo: android.media.MediaCodec.BufferInfo
+    ) {
         val size = bufferInfo.size
         val flags = bufferInfo.flags
         val pts = bufferInfo.presentationTimeUs
@@ -378,11 +381,40 @@ class LanRemoteViewModel : ViewModel() {
                         val originalY = ry * _serverHeight.value
 
                         if (RemoteAccessibilityService.performTap(originalX, originalY)) {
-                            addServerLog("[$clientIp] 模拟点击: (${originalX.toInt()}, ${originalY.toInt()})", LogType.SUCCESS)
+                            addServerLog(
+                                "[$clientIp] 模拟点击: (${originalX.toInt()}, ${originalY.toInt()})",
+                                LogType.SUCCESS
+                            )
                         } else {
                             addServerLog("[$clientIp] 点击失败: 无障碍服务未运行", LogType.WARNING)
                         }
                     }
+                }
+
+                command.startsWith("DOWN:") -> {
+                    val coords = command.substringAfter("DOWN:").split(",")
+                    if (coords.size == 2) {
+                        val rx = coords[0].toFloatOrNull() ?: return
+                        val ry = coords[1].toFloatOrNull() ?: return
+                        val x = rx * _serverWidth.value
+                        val y = ry * _serverHeight.value
+                        RemoteAccessibilityService.handleTouchDown(x, y)
+                    }
+                }
+
+                command.startsWith("MOVE:") -> {
+                    val coords = command.substringAfter("MOVE:").split(",")
+                    if (coords.size == 2) {
+                        val rx = coords[0].toFloatOrNull() ?: return
+                        val ry = coords[1].toFloatOrNull() ?: return
+                        val x = rx * _serverWidth.value
+                        val y = ry * _serverHeight.value
+                        RemoteAccessibilityService.handleTouchMove(x, y)
+                    }
+                }
+
+                command.startsWith("UP:") -> {
+                    RemoteAccessibilityService.handleTouchUp()
                 }
 
                 command.startsWith("SWIPE:") -> {
@@ -404,7 +436,10 @@ class LanRemoteViewModel : ViewModel() {
                             if (RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)) {
                                 addServerLog("[$clientIp] 模拟滑动", LogType.SUCCESS)
                             } else {
-                                addServerLog("[$clientIp] 滑动失败: 无障碍服务未运行", LogType.WARNING)
+                                addServerLog(
+                                    "[$clientIp] 滑动失败: 无障碍服务未运行",
+                                    LogType.WARNING
+                                )
                             }
                         }
                     }
@@ -502,15 +537,24 @@ class LanRemoteViewModel : ViewModel() {
                     _encodedFrameFlow.tryEmit(frame)
                     _hasFrameReceived.value = true
                 }
+
                 NetworkConstants.TYPE_SIZE -> { // TYPE_SIZE
-                    val message = String(ByteArray(buffer.remaining()).apply { buffer.get(this) }, Charsets.UTF_8)
+                    val message = String(
+                        ByteArray(buffer.remaining()).apply { buffer.get(this) },
+                        Charsets.UTF_8
+                    )
                     if (message.startsWith("SIZE:")) {
                         val sizes = message.substringAfter("SIZE:").split(",")
                         if (sizes.size >= 3) {
-                            _mirroredWidth.value = sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
-                            _mirroredHeight.value = sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
+                            _mirroredWidth.value =
+                                sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
+                            _mirroredHeight.value =
+                                sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
                             val rot = if (sizes[2].toIntOrNull() == 1) "横屏" else "竖屏"
-                            addControllerLog("同步远端分辨率: ${_mirroredWidth.value}x${_mirroredHeight.value} ($rot)", LogType.INFO)
+                            addControllerLog(
+                                "同步远端分辨率: ${_mirroredWidth.value}x${_mirroredHeight.value} ($rot)",
+                                LogType.INFO
+                            )
                         }
                     }
                 }
@@ -549,6 +593,7 @@ class LanRemoteViewModel : ViewModel() {
                         addControllerLog("连接已断开", LogType.WARNING)
                         _hasFrameReceived.value = false
                     }
+
                     else -> {}
                 }
             },
@@ -563,12 +608,7 @@ class LanRemoteViewModel : ViewModel() {
      * @param actionCommand 操作指令协议串 (例如 TAP:0.5,0.4)
      */
     fun sendClientAction(actionCommand: String) {
-        val client = socketClient
-        if (client != null && _connectionState.value == ConnectionState.Connected) {
-
-            viewModelScope.launch(Dispatchers.IO) { client.sendCommand(actionCommand) }
-
-        }
+        socketClient?.sendCommand(actionCommand)
     }
 
     /**

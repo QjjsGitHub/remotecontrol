@@ -241,7 +241,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                     val targetWidthPx = (windowWidthDp * density).toInt()
                     val targetHeightPx = ((windowHeightDp + 24) * density).toInt()
 
-                    if (params.width != targetWidthPx || params.height != targetHeightPx) {
+                    // 【优化】引入 2 像素阈值判断，减少由于浮点数微小变动导致的频繁系统调用
+                    if (kotlin.math.abs(params.width - targetWidthPx) > 2 ||
+                        kotlin.math.abs(params.height - targetHeightPx) > 2
+                    ) {
                         params.width = targetWidthPx
                         params.height = targetHeightPx
                         try {
@@ -430,26 +433,28 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                                     isTouchLocked
                                                 ) {
                                                     if (!isTouchLocked) {
-                                                        var dragStartX = 0f
-                                                        var dragStartY = 0f
                                                         detectDragGestures(
                                                             onDragStart = { offset ->
-                                                                dragStartX = offset.x
-                                                                dragStartY = offset.y
+                                                                if (localViewW > 0 && localViewH > 0) {
+                                                                    val rx = offset.x / localViewW
+                                                                    val ry = offset.y / localViewH
+                                                                    viewModel.sendClientAction("DOWN:$rx,$ry")
+                                                                }
                                                             },
-                                                            onDragEnd = {},
+                                                            onDragEnd = {
+                                                                viewModel.sendClientAction("UP:0,0")
+                                                            },
+                                                            onDragCancel = {
+                                                                viewModel.sendClientAction("UP:0,0")
+                                                            },
                                                             onDrag = { change, _ ->
                                                                 change.consume()
                                                                 val currentX = change.position.x
                                                                 val currentY = change.position.y
                                                                 if (localViewW > 0 && localViewH > 0) {
-                                                                    val rsx =
-                                                                        dragStartX / localViewW
-                                                                    val rsy =
-                                                                        dragStartY / localViewH
                                                                     val rex = currentX / localViewW
                                                                     val rey = currentY / localViewH
-                                                                    viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
+                                                                    viewModel.sendClientAction("MOVE:$rex,$rey")
                                                                 }
                                                             }
                                                         )
@@ -517,6 +522,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
             // 向屏幕添加全局 Overlay 悬浮视图层
             wm.addView(composeView, params)
             floatingView = composeView
+            // 【细节改进】addView 成功后，将生命周期提升至 RESUMED，确保 Compose 动画和 API 正常工作
+            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add floating window view: ${e.message}")
             stopSelf()
@@ -529,6 +536,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
     override fun onDestroy() {
         _isRunning.value = false
         Log.i(TAG, "FloatingWindowService onDestroy")
+        // 【细节改进】在移除视图前，将状态退回至 STARTED
+        lifecycleRegistry.currentState = Lifecycle.State.STARTED
         floatingView?.let { view ->
             try {
                 // 彻底释放全局 Overlay 视图，杜绝悬浮窗内存泄漏
@@ -558,87 +567,90 @@ fun VideoSurfaceViewer(
     val videoWidth by viewModel.mirroredWidth.collectAsState()
     val videoHeight by viewModel.mirroredHeight.collectAsState()
 
-    // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
-    var decoderToken by remember { mutableIntStateOf(0) }
-    var decoder by remember { mutableStateOf<MediaCodec?>(null) }
+    // 【关键修复点】当分辨率变化时，通过 key 强制重组整个组件，确保解码器重建
+    androidx.compose.runtime.key(videoWidth, videoHeight) {
+        // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
+        var decoderToken by remember { mutableIntStateOf(0) }
+        var decoder by remember { mutableStateOf<MediaCodec?>(null) }
 
-    LaunchedEffect(viewModel, decoderToken) {
-        val codec = decoder ?: return@LaunchedEffect
-        viewModel.encodedFrameFlow.collect { frameInfo ->
-            val bytes = frameInfo.first
-            val flags = frameInfo.second
-            val pts = frameInfo.third
-            try {
-                val inputIndex = codec.dequeueInputBuffer(10000)
-                if (inputIndex >= 0) {
-                    codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
-                        inputBuffer.clear()
-                        inputBuffer.put(bytes)
-                        codec.queueInputBuffer(inputIndex, 0, bytes.size, pts, flags)
+        LaunchedEffect(viewModel, decoderToken) {
+            val codec = decoder ?: return@LaunchedEffect
+            viewModel.encodedFrameFlow.collect { frameInfo ->
+                val bytes = frameInfo.first
+                val flags = frameInfo.second
+                val pts = frameInfo.third
+                try {
+                    val inputIndex = codec.dequeueInputBuffer(10000)
+                    if (inputIndex >= 0) {
+                        codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
+                            inputBuffer.clear()
+                            inputBuffer.put(bytes)
+                            codec.queueInputBuffer(inputIndex, 0, bytes.size, pts, flags)
+                        }
                     }
-                }
 
-                val bufferInfo = MediaCodec.BufferInfo()
-                var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                while (outputIndex >= 0) {
-                    codec.releaseOutputBuffer(outputIndex, true)
-                    outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                    val bufferInfo = MediaCodec.BufferInfo()
+                    var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                    while (outputIndex >= 0) {
+                        codec.releaseOutputBuffer(outputIndex, true)
+                        outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                    }
+                } catch (e: Exception) {
+                    viewModel.addControllerLog(
+                        "解码推流失败: ${e.message}",
+                        com.example.ui.LogType.WARNING
+                    )
                 }
-            } catch (e: Exception) {
-                viewModel.addControllerLog(
-                    "解码推流失败: ${e.message}",
-                    com.example.ui.LogType.WARNING
-                )
             }
         }
+
+        AndroidView(
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(holder: SurfaceHolder) {
+                            try {
+                                val codec =
+                                    MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                                val format = MediaFormat.createVideoFormat(
+                                    MediaFormat.MIMETYPE_VIDEO_AVC,
+                                    videoWidth,
+                                    videoHeight
+                                )
+                                codec.configure(format, holder.surface, null, 0)
+                                codec.start()
+
+                                decoder = codec
+                                decoderToken++ // 强制重启 LaunchedEffect
+                            } catch (e: Exception) {
+                                viewModel.addControllerLog(
+                                    "构建解码器失败: ${e.message}",
+                                    com.example.ui.LogType.WARNING
+                                )
+                            }
+                        }
+
+                        override fun surfaceChanged(
+                            holder: SurfaceHolder,
+                            format: Int,
+                            w: Int,
+                            h: Int
+                        ) {
+                        }
+
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {
+                            val activeCodec = decoder
+                            decoder = null
+                            try {
+                                activeCodec?.stop()
+                                activeCodec?.release()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    })
+                }
+            },
+            modifier = modifier
+        )
     }
-
-    AndroidView(
-        factory = { ctx ->
-            SurfaceView(ctx).apply {
-                holder.addCallback(object : SurfaceHolder.Callback {
-                    override fun surfaceCreated(holder: SurfaceHolder) {
-                        try {
-                            val codec =
-                                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val format = MediaFormat.createVideoFormat(
-                                MediaFormat.MIMETYPE_VIDEO_AVC,
-                                videoWidth,
-                                videoHeight
-                            )
-                            codec.configure(format, holder.surface, null, 0)
-                            codec.start()
-
-                            decoder = codec
-                            decoderToken++ // 强制重启 LaunchedEffect
-                        } catch (e: Exception) {
-                            viewModel.addControllerLog(
-                                "构建解码器失败: ${e.message}",
-                                com.example.ui.LogType.WARNING
-                            )
-                        }
-                    }
-
-                    override fun surfaceChanged(
-                        holder: SurfaceHolder,
-                        format: Int,
-                        w: Int,
-                        h: Int
-                    ) {
-                    }
-
-                    override fun surfaceDestroyed(holder: SurfaceHolder) {
-                        val activeCodec = decoder
-                        decoder = null
-                        try {
-                            activeCodec?.stop()
-                            activeCodec?.release()
-                        } catch (_: Exception) {
-                        }
-                    }
-                })
-            }
-        },
-        modifier = modifier
-    )
 }
