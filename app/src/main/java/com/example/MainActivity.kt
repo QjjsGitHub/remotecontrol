@@ -340,7 +340,7 @@ fun SimplifiedDashboardScreen(
                                 if (isServerRunning) {
                                     viewModel.stopServer(context)
                                 } else {
-                                    viewModel.startServer(context)
+                                    viewModel.startServer()
                                     if (!isScreenCaptureRunning) {
                                         onRequestScreenShare()
                                     }
@@ -647,7 +647,7 @@ fun SimplifiedDashboardScreen(
                                 }
                             } else {
                                 Button(
-                                    onClick = { viewModel.connectToSelectedServer(context) },
+                                    onClick = { viewModel.connectToSelectedServer() },
                                     modifier = Modifier.height(56.dp),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
