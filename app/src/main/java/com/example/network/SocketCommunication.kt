@@ -16,7 +16,6 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
@@ -69,7 +68,8 @@ class SocketServer(
     val port: Int = NetworkConstants.TCP_PORT,
     private val onClientConnected: (String) -> Unit,
     private val onClientDisconnected: (String) -> Unit,
-    private val onCommandReceived: (String, String) -> Unit
+    private val onCommandReceived: (String, String) -> Unit,
+    private val onError: (String) -> Unit = {}
 ) {
     private val TAG = "SocketServer"
     private var serverSocket: ServerSocket? = null
@@ -78,7 +78,6 @@ class SocketServer(
     private val activeClients = ConcurrentHashMap<String, ClientHandler>()
 
     inner class ClientHandler(val socket: Socket, val clientIp: String) {
-        // Channel.CONFLATED：如果网络堵塞导致发送慢，新来的视频帧会直接覆盖旧帧，天然解决画面延迟累积问题
         private val frameChannel =
             kotlinx.coroutines.channels.Channel<ByteArray>(capacity = kotlinx.coroutines.channels.Channel.CONFLATED)
 
@@ -92,13 +91,10 @@ class SocketServer(
                         outputStream.write(data)
                         outputStream.flush()
                     }
-                } catch (e: SocketException) {
-                    Log.w(TAG, "客户端 [$clientIp] 连接中断: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(
-                        TAG,
-                        "客户端 [$clientIp] 发送数据失败: ${e.javaClass.simpleName}: ${e.message}"
-                    )
+                    if (isRunning && socket.isConnected) {
+                        onError("向客户端 [$clientIp] 发送数据失败: ${e.message}")
+                    }
                 } finally {
                     disconnect()
                 }
@@ -118,17 +114,14 @@ class SocketServer(
                                 onCommandReceived(clientIp, message)
                             }
                         } else {
-                            Log.w(TAG, "客户端 [$clientIp] 发送异常大小的数据包: $length bytes")
+                            onError("客户端 [$clientIp] 发送异常大小的数据包: $length 字节")
                             disconnect()
                         }
                     }
-                } catch (e: SocketException) {
-                    Log.w(TAG, "客户端 [$clientIp] 连接中断: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(
-                        TAG,
-                        "客户端 [$clientIp] 接收数据失败: ${e.javaClass.simpleName}: ${e.message}"
-                    )
+                    if (isRunning && socket.isConnected) {
+                        onError("接收客户端 [$clientIp] 指令失败: ${e.message}")
+                    }
                 } finally {
                     disconnect()
                 }
@@ -141,8 +134,8 @@ class SocketServer(
 
         fun disconnect() {
             try {
-                socket.close()
-            } catch (e: Exception) {
+                if (!socket.isClosed) socket.close()
+            } catch (_: Exception) {
             }
             activeClients.remove(clientIp)
             frameChannel.close()
@@ -155,10 +148,7 @@ class SocketServer(
     }
 
     fun start() {
-        if (isRunning) {
-            Log.w(TAG, "服务端已在运行中")
-            return
-        }
+        if (isRunning) return
         isRunning = true
         scope.launch {
             try {
@@ -173,12 +163,10 @@ class SocketServer(
                     handler.start()
                     Log.d(TAG, "新客户端连接: $clientIp")
                 }
-            } catch (e: SocketException) {
-                if (isRunning) {
-                    Log.e(TAG, "服务端套接字异常: ${e.javaClass.simpleName}: ${e.message}")
-                }
             } catch (e: Exception) {
-                Log.e(TAG, "服务端启动失败: ${e.javaClass.simpleName}: ${e.message}")
+                if (isRunning) {
+                    onError("服务端运行异常: ${e.message}")
+                }
             } finally {
                 if (isRunning) stop()
             }
@@ -188,11 +176,9 @@ class SocketServer(
     fun stop() {
         if (!isRunning) return
         isRunning = false
-        Log.d(TAG, "正在停止服务端，活跃客户端: ${activeClients.size}")
         try {
             serverSocket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "关闭服务端套接字失败: ${e.message}")
+        } catch (_: Exception) {
         }
         serverSocket = null
         activeClients.values.forEach { it.disconnect() }
@@ -206,7 +192,8 @@ class SocketClient(
     val serverIp: String,
     val port: Int = NetworkConstants.TCP_PORT,
     private val onStateChanged: (ConnectionState) -> Unit,
-    private val onMessageReceived: (ByteArray) -> Unit
+    private val onMessageReceived: (ByteArray) -> Unit,
+    private val onError: (String) -> Unit = {}
 ) {
     private val TAG = "SocketClient"
     private var socket: Socket? = null
@@ -215,13 +202,9 @@ class SocketClient(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun connect() {
-        if (isRunning) {
-            Log.w(TAG, "连接已在进行中")
-            return
-        }
+        if (isRunning) return
         isRunning = true
         onStateChanged(ConnectionState.Connecting)
-        Log.d(TAG, "正在连接到服务端: $serverIp:$port")
 
         scope.launch {
             try {
@@ -246,19 +229,18 @@ class SocketClient(
                             onMessageReceived(payload)
                         }
                     } else {
-                        Log.w(TAG, "接收到异常大小的数据包: $length bytes")
+                        onError("接收到异常大小的数据包: $length 字节")
                         disconnectInternal()
                     }
                 }
-            } catch (e: SocketTimeoutException) {
-                Log.e(TAG, "连接超时: 无法连接到 $serverIp:$port")
-                withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Disconnected) }
-            } catch (e: SocketException) {
-                Log.e(TAG, "连接断开: ${e.javaClass.simpleName}: ${e.message}")
+            } catch (_: SocketTimeoutException) {
+                onError("连接超时: 无法连接到 $serverIp")
                 withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Disconnected) }
             } catch (e: Exception) {
-                Log.e(TAG, "连接失败: ${e.javaClass.simpleName}: ${e.message}")
-                withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Disconnected) }
+                if (isRunning) {
+                    onError("连接异常: ${e.message}")
+                    withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Disconnected) }
+                }
             } finally {
                 isRunning = false
                 disconnectInternal()
@@ -276,9 +258,9 @@ class SocketClient(
                 out.writeInt(bytes.size)
                 out.write(bytes)
                 out.flush()
-                true // 实实在在的发送成功
+                true
             } catch (e: Exception) {
-                Log.e(TAG, "发送失败: ${e.message}")
+                onError("指令发送失败: ${e.message}")
                 false
             }
         } else {
@@ -286,23 +268,20 @@ class SocketClient(
         }
     }
 
-
     fun disconnect() {
-        if (!isRunning) {
-            Log.d(TAG, "连接已处于断开状态")
-            return
-        }
+        if (!isRunning) return
         isRunning = false
-        Log.d(TAG, "正在断开与服务端的连接")
         scope.launch { disconnectInternal() }
     }
 
     private suspend fun disconnectInternal() {
         try {
-            socket?.close()
-            Log.d(TAG, "Socket 已关闭")
-        } catch (e: Exception) {
-            Log.e(TAG, "关闭 Socket 失败: ${e.message}")
+            if (socket?.isClosed == false) {
+                withContext(Dispatchers.IO) {
+                    socket?.close()
+                }
+            }
+        } catch (_: Exception) {
         }
         socket = null
         outputStream = null
@@ -320,9 +299,9 @@ class SocketClient(
  */
 class UdpBroadcaster(
     private val serverIp: String,
-    private val port: Int = NetworkConstants.UDP_PORT
+    private val port: Int = NetworkConstants.UDP_PORT,
+    private val onError: (String) -> Unit = {}
 ) {
-    private val TAG = "UdpBroadcaster"
     private var socket: DatagramSocket? = null
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -333,7 +312,6 @@ class UdpBroadcaster(
     fun start() {
         if (isRunning) return
         isRunning = true
-        Log.d(TAG, "启动 UDP 广播器: $serverIp:$port")
         scope.launch {
             try {
                 socket = DatagramSocket().apply {
@@ -350,10 +328,10 @@ class UdpBroadcaster(
                     socket?.send(packet)
                     delay(NetworkConstants.BROADCAST_INTERVAL_MS.milliseconds)
                 }
-            } catch (e: SocketException) {
-                Log.e(TAG, "UDP 广播异常: ${e.javaClass.simpleName}: ${e.message}")
             } catch (e: Exception) {
-                Log.e(TAG, "UDP 广播启动失败: ${e.javaClass.simpleName}: ${e.message}")
+                if (isRunning) {
+                    onError("UDP 广播异常: ${e.message}")
+                }
             }
         }
     }
@@ -364,11 +342,9 @@ class UdpBroadcaster(
     fun stop() {
         if (!isRunning) return
         isRunning = false
-        Log.d(TAG, "停止 UDP 广播器")
         try {
             socket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "关闭 UDP socket 失败: ${e.message}")
+        } catch (_: Exception) {
         }
         socket = null
         scope.coroutineContext.cancelChildren()
@@ -385,7 +361,8 @@ class UdpBroadcaster(
  */
 class UdpListener(
     private val port: Int = NetworkConstants.UDP_PORT,
-    private val onServersUpdated: (Set<String>) -> Unit
+    private val onServersUpdated: (Set<String>) -> Unit,
+    private val onError: (String) -> Unit = {}
 ) {
     private val TAG = "UdpListener"
     private var socket: DatagramSocket? = null
@@ -401,17 +378,15 @@ class UdpListener(
     fun start() {
         if (isRunning) return
         isRunning = true
-        Log.d(TAG, "启动 UDP 监听器: 端口 $port")
 
         // 接收广播的协程
         scope.launch {
             try {
                 socket = DatagramSocket(port).apply {
                     reuseAddress = true
-                    soTimeout = 2000  // 5秒超时，避免永久阻塞
+                    soTimeout = 2000
                 }
                 val buffer = ByteArray(NetworkConstants.UDP_BUFFER_SIZE)
-                Log.d(TAG, "UDP 监听器开始扫描局域网设备")
                 while (isRunning) {
                     try {
                         val packet = DatagramPacket(buffer, buffer.size)
@@ -426,19 +401,17 @@ class UdpListener(
                             lastSeenMap[ip] = now
 
                             if (isNew) {
-                                Log.d(TAG, "发现新服务端: $ip")
                                 withContext(Dispatchers.Main) {
                                     onServersUpdated(lastSeenMap.keys.toSet())
                                 }
                             }
                         }
-                    } catch (e: SocketTimeoutException) {
-                        // 超时属于正常循环
+                    } catch (_: SocketTimeoutException) {
                     }
                 }
             } catch (e: Exception) {
                 if (isRunning) {
-                    Log.e(TAG, "UDP 监听运行异常: ${e.message}")
+                    onError("UDP 监听异常: ${e.message}")
                 }
             }
         }
@@ -446,7 +419,7 @@ class UdpListener(
         // 定时清理过期设备的协程 (TTL 机制)
         scope.launch {
             while (isRunning) {
-                delay(NetworkConstants.BROADCAST_INTERVAL_MS * 2) // 每 4 秒检查一次
+                delay((NetworkConstants.BROADCAST_INTERVAL_MS * 2).milliseconds) // 每 4 秒检查一次
                 val now = System.currentTimeMillis()
                 var hasRemoved = false
                 val iterator = lastSeenMap.entries.iterator()
@@ -476,11 +449,9 @@ class UdpListener(
     fun stop() {
         if (!isRunning) return
         isRunning = false
-        Log.d(TAG, "停止 UDP 监听器")
         try {
             socket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "关闭 UDP socket 失败: ${e.message}")
+        } catch (_: Exception) {
         }
         socket = null
         lastSeenMap.clear()

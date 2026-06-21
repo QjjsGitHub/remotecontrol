@@ -232,7 +232,6 @@ class LanRemoteViewModel : ViewModel() {
                 onClientConnected = { clientIp ->
                     _connectedClients.value = (_connectedClients.value + clientIp).distinct()
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
-
                     updateScreenSize()
                 },
                 onClientDisconnected = { clientIp ->
@@ -241,12 +240,19 @@ class LanRemoteViewModel : ViewModel() {
                 },
                 onCommandReceived = { clientIp, command ->
                     handleReceivedCommand(context, clientIp, command)
+                },
+                onError = { error ->
+                    addServerLog(error, LogType.WARNING)
                 }
             )
             socketServer?.start()
 
             // 建立局域网 UDP 定时广播器
-            udpBroadcaster = UdpBroadcaster(serverIp = ip, port = NetworkConstants.UDP_PORT)
+            udpBroadcaster = UdpBroadcaster(
+                serverIp = ip,
+                port = NetworkConstants.UDP_PORT,
+                onError = { error -> addServerLog(error, LogType.WARNING) }
+            )
             udpBroadcaster?.start()
 
             _isServerRunning.value = true
@@ -338,45 +344,26 @@ class LanRemoteViewModel : ViewModel() {
      * @param command 命令参数协议串
      */
     private fun handleReceivedCommand(context: Context, clientIp: String, command: String) {
-        when {
-            command.startsWith("TAP:") -> {
-                try {
+        try {
+            when {
+                command.startsWith("TAP:") -> {
                     val coords = command.substringAfter("TAP:").split(",")
                     if (coords.size == 2) {
                         val rx = coords[0].toFloatOrNull() ?: return
                         val ry = coords[1].toFloatOrNull() ?: return
 
-                        // 将相对百分比映射还原为服务端物理屏幕的大屏精确实际点击像素位置
                         val originalX = rx * _serverWidth.value
                         val originalY = ry * _serverHeight.value
 
-                        val injected = RemoteAccessibilityService.performTap(originalX, originalY)
-                        if (injected) {
-                            addServerLog(
-                                "[$clientIp] 成功模拟点击坐标: (${originalX.toInt()}, ${originalY.toInt()})",
-                                LogType.SUCCESS
-                            )
+                        if (RemoteAccessibilityService.performTap(originalX, originalY)) {
+                            addServerLog("[$clientIp] 模拟点击: (${originalX.toInt()}, ${originalY.toInt()})", LogType.SUCCESS)
                         } else {
-                            addServerLog(
-                                "[$clientIp] 模拟点击失败: 辅助功能运行状态 [${RemoteAccessibilityService.isServiceRunning()}]",
-                                LogType.WARNING
-                            )
+                            addServerLog("[$clientIp] 点击失败: 无障碍服务未运行", LogType.WARNING)
                         }
                     }
-                } catch (e: NumberFormatException) {
-                    addServerLog("[$clientIp] TAP 命令格式错误: 坐标解析失败", LogType.WARNING)
-                    Log.e(TAG, "TAP 坐标解析异常: ${e.message}")
-                } catch (e: Exception) {
-                    addServerLog(
-                        "[$clientIp] TAP 命令处理异常: ${e.javaClass.simpleName}",
-                        LogType.WARNING
-                    )
-                    Log.e(TAG, "TAP 处理异常", e)
                 }
-            }
 
-            command.startsWith("SWIPE:") -> {
-                try {
+                command.startsWith("SWIPE:") -> {
                     val paths = command.substringAfter("SWIPE:").split(";")
                     if (paths.size == 2) {
                         val start = paths[0].split(",")
@@ -392,45 +379,18 @@ class LanRemoteViewModel : ViewModel() {
                             val ex = rex * _serverWidth.value
                             val ey = rey * _serverHeight.value
 
-                            val injected = RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)
-                            if (injected) {
-                                addServerLog(
-                                    "[$clientIp] 成功模拟滑动: (${sx.toInt()}, ${sy.toInt()}) -> (${ex.toInt()}, ${ey.toInt()})",
-                                    LogType.SUCCESS
-                                )
+                            if (RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)) {
+                                addServerLog("[$clientIp] 模拟滑动", LogType.SUCCESS)
                             } else {
-                                addServerLog(
-                                    "[$clientIp] 模拟滑动失败: 辅助功能状态异常",
-                                    LogType.WARNING
-                                )
+                                addServerLog("[$clientIp] 滑动失败: 无障碍服务未运行", LogType.WARNING)
                             }
-                        } else {
-                            addServerLog(
-                                "[$clientIp] SWIPE 命令格式错误: 路径点数量不足",
-                                LogType.WARNING
-                            )
                         }
-                    } else {
-                        addServerLog(
-                            "[$clientIp] SWIPE 命令格式错误: 缺少路径分隔符",
-                            LogType.WARNING
-                        )
                     }
-                } catch (e: NumberFormatException) {
-                    addServerLog("[$clientIp] SWIPE 命令格式错误: 坐标解析失败", LogType.WARNING)
-                    Log.e(TAG, "SWIPE 坐标解析异常: ${e.message}")
-                } catch (e: Exception) {
-                    addServerLog(
-                        "[$clientIp] SWIPE 命令处理异常: ${e.javaClass.simpleName}",
-                        LogType.WARNING
-                    )
-                    Log.e(TAG, "SWIPE 处理异常", e)
                 }
+                else -> addServerLog("[$clientIp] 未知指令: $command", LogType.WARNING)
             }
-
-            else -> {
-                addServerLog("[$clientIp] 未知命令: ${command.take(20)}...", LogType.WARNING)
-            }
+        } catch (e: Exception) {
+            addServerLog("[$clientIp] 指令处理异常: ${e.message}", LogType.WARNING)
         }
     }
 
@@ -445,22 +405,21 @@ class LanRemoteViewModel : ViewModel() {
     fun startDiscovery() {
         _discoveredServers.value = emptySet()
         udpListener?.stop()
-        udpListener = UdpListener(port = NetworkConstants.UDP_PORT) { serverSet ->
-            val oldSet = _discoveredServers.value
-            _discoveredServers.value = serverSet
-            
-            // 找出新增的 IP 记录日志
-            val newIps = serverSet - oldSet
-            newIps.forEach { ip ->
-                addControllerLog("发现局域网可用共控端设备: $ip", LogType.SUCCESS)
-            }
-            
-            // 找出消失的 IP 记录日志
-            val lostIps = oldSet - serverSet
-            lostIps.forEach { ip ->
-                addControllerLog("局域网设备已离线: $ip", LogType.WARNING)
-            }
-        }
+        udpListener = UdpListener(
+            port = NetworkConstants.UDP_PORT,
+            onServersUpdated = { serverSet ->
+                val oldSet = _discoveredServers.value
+                _discoveredServers.value = serverSet
+
+                (serverSet - oldSet).forEach { ip ->
+                    addControllerLog("发现局域网可用共控端设备: $ip", LogType.SUCCESS)
+                }
+                (oldSet - serverSet).forEach { ip ->
+                    addControllerLog("局域网设备已离线: $ip", LogType.WARNING)
+                }
+            },
+            onError = { error -> addControllerLog(error, LogType.WARNING) }
+        )
         udpListener?.start()
         addControllerLog("已开启局域网探针寻找服务端设备...", LogType.INFO)
     }
@@ -494,42 +453,34 @@ class LanRemoteViewModel : ViewModel() {
             val buffer = java.nio.ByteBuffer.wrap(payload)
             val type = buffer.get().toInt()
 
-            if (type == 2) { // TYPE_VIDEO：处理视频流
-                val flags = buffer.int
-                val presentationTimeUs = buffer.long
-                val data = ByteArray(buffer.remaining())
-                buffer.get(data)
-
-                val frameTriple = Triple(data, flags, presentationTimeUs)
-                if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                    _clientCodecConfig.value = frameTriple
+            when (type) {
+                2 -> { // TYPE_VIDEO
+                    val flags = buffer.int
+                    val pts = buffer.long
+                    val data = ByteArray(buffer.remaining())
+                    buffer.get(data)
+                    val frame = Triple(data, flags, pts)
+                    if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        _clientCodecConfig.value = frame
+                    }
+                    _encodedFrameFlow.tryEmit(frame)
+                    _hasFrameReceived.value = true
                 }
-
-                _encodedFrameFlow.tryEmit(frameTriple)
-                _hasFrameReceived.value = true
-
-            } else if (type == 3) { // TYPE_SIZE：处理分辨率配置
-                val msgBytes = ByteArray(buffer.remaining())
-                buffer.get(msgBytes)
-                val message = String(msgBytes, Charsets.UTF_8)
-                if (message.startsWith("SIZE:")) {
-                    val sizes = message.substringAfter("SIZE:").split(",")
-                    if (sizes.size >= 3) {
-                        _mirroredWidth.value =
-                            sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
-                        _mirroredHeight.value =
-                            sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
-                        val rotation = sizes[2].toIntOrNull() ?: 0
-                        addControllerLog(
-                            "同步远端屏幕状态: 镜像宽:${_mirroredWidth.value}  镜像高:${_mirroredHeight.value} " +
-                                    " ${if (rotation == 1) "横屏" else "竖屏"}",
-                            LogType.INFO
-                        )
+                3 -> { // TYPE_SIZE
+                    val message = String(ByteArray(buffer.remaining()).apply { buffer.get(this) }, Charsets.UTF_8)
+                    if (message.startsWith("SIZE:")) {
+                        val sizes = message.substringAfter("SIZE:").split(",")
+                        if (sizes.size >= 3) {
+                            _mirroredWidth.value = sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
+                            _mirroredHeight.value = sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
+                            val rot = if (sizes[2].toIntOrNull() == 1) "横屏" else "竖屏"
+                            addControllerLog("同步远端分辨率: ${_mirroredWidth.value}x${_mirroredHeight.value} ($rot)", LogType.INFO)
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "解析二进制包失败: ${e.message}")
+            addControllerLog("数据解析异常: ${e.message}", LogType.WARNING)
         }
     }
 
@@ -557,21 +508,16 @@ class LanRemoteViewModel : ViewModel() {
             onStateChanged = { state ->
                 _connectionState.value = state
                 when (state) {
-                    ConnectionState.Connected -> {
-                        addControllerLog("已打通连接，远程画面加载中...", LogType.SUCCESS)
-                    }
-
+                    ConnectionState.Connected -> addControllerLog("已建立连接", LogType.SUCCESS)
                     ConnectionState.Disconnected -> {
-                        addControllerLog("服务端已被断开", LogType.WARNING)
+                        addControllerLog("连接已断开", LogType.WARNING)
                         _hasFrameReceived.value = false
                     }
-
                     else -> {}
                 }
             },
-            onMessageReceived = { payload ->
-                handleReceivedData(payload)
-            }
+            onMessageReceived = { handleReceivedData(it) },
+            onError = { error -> addControllerLog(error, LogType.WARNING) }
         )
         socketClient?.connect()
     }

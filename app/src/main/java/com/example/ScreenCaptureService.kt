@@ -135,24 +135,23 @@ class ScreenCaptureService : Service() {
         try {
             codecThread?.interrupt()
             codecThread?.join(500)
-        } catch (e: Exception) {
-            Log.e(TAG, "停止旧编码线程时出现异常: ${e.message}")
+        } catch (_: Exception) {
         }
         codecThread = null
 
-        // 2. 释放旧的 MediaCodec 和 Surface（注意：这里绝对不释放 VirtualDisplay 和 MediaProjection）
+        // 2. 释放旧的 MediaCodec 和 Surface
         try {
-            mediaCodec?.stop()
-            mediaCodec?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "释放旧MediaCodec时出现异常: ${e.message}")
+            mediaCodec?.apply {
+                stop()
+                release()
+            }
+        } catch (_: Exception) {
         }
         mediaCodec = null
 
         try {
             codecSurface?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "释放旧Surface时出现异常: ${e.message}")
+        } catch (_: Exception) {
         }
         codecSurface = null
 
@@ -168,46 +167,48 @@ class ScreenCaptureService : Service() {
                 MediaFormat.MIMETYPE_VIDEO_AVC,
                 captureWidth,
                 captureHeight
-            )
-            format.setInteger(
-                MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-            )
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            ).apply {
+                setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                )
+                setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
+                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
 
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-
-            // 获取新尺寸的 Surface
-            codecSurface = codec.createInputSurface()
-            mediaCodec = codec
-            codec.start()
+            mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+                configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                codecSurface = createInputSurface()
+                start()
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "重建 MediaCodec 编码器失败: ${e.message}")
+            LanRemoteViewModel.instance?.addServerLog(
+                "重建编码器失败: ${e.message}",
+                com.example.ui.LogType.WARNING
+            )
             return
         }
 
-        // 5. 【核心修正】不创建新的 VirtualDisplay，而是更新现有的！
+        // 5. 更新 VirtualDisplay
         try {
-            // 先移除旧的 Surface 避免冲突
-            virtualDisplay?.surface = null
-            // 调整 VirtualDisplay 的物理输出尺寸
-            virtualDisplay?.resize(captureWidth, captureHeight, density)
-            // 绑定新的编码器 Surface
-            virtualDisplay?.surface = codecSurface
+            virtualDisplay?.apply {
+                surface = null
+                resize(captureWidth, captureHeight, density)
+                surface = codecSurface
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "调整 VirtualDisplay 尺寸失败: ${e.message}")
+            LanRemoteViewModel.instance?.addServerLog(
+                "调整虚拟显示失败: ${e.message}",
+                com.example.ui.LogType.WARNING
+            )
             return
         }
 
-        // 6. 重新启动数据抓取轮询分发线程
         isEncoding = true
         startEncodingLoop()
-
         LanRemoteViewModel.instance?.addServerLog(
-            "成功适应屏幕旋转，流媒体分辨率变更为: ${captureWidth}x${captureHeight}",
+            "屏幕自适应完成: ${captureWidth}x${captureHeight}",
             com.example.ui.LogType.SUCCESS
         )
     }
@@ -271,27 +272,16 @@ class ScreenCaptureService : Service() {
         }
 
         try {
-            // 利用 MediaProjectionManager 与 resultCode/data 实例化屏幕流捕获连接句柄
             mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
             if (mediaProjection == null) {
-                Log.e(TAG, "Failed to get MediaProjection instance")
                 LanRemoteViewModel.instance?.addServerLog(
-                    "投屏授权获取失败：MediaProjection projection is null",
+                    "投屏授权失败: 实例为空",
                     com.example.ui.LogType.WARNING
                 )
                 stopSelf()
                 return START_NOT_STICKY
             }
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException getting MediaProjection: ${e.message}")
-            LanRemoteViewModel.instance?.addServerLog(
-                "系统投屏拒绝授权或已被占用: ${e.message}",
-                com.example.ui.LogType.WARNING
-            )
-            stopSelf()
-            return START_NOT_STICKY
-        } catch (e: Throwable) {
-            Log.e(TAG, "Error getting MediaProjection: ${e.message}")
+        } catch (e: Exception) {
             LanRemoteViewModel.instance?.addServerLog(
                 "创建投屏引擎异常: ${e.message}",
                 com.example.ui.LogType.WARNING
@@ -330,21 +320,21 @@ class ScreenCaptureService : Service() {
                 MediaFormat.MIMETYPE_VIDEO_AVC,
                 captureWidth,
                 captureHeight
-            )
-            format.setInteger(
-                MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-            )
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000) // 2 Mbps 比特率
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30) // 30 帧速率 (FPS)
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 秒一个关键帧 (I-Frame)
+            ).apply {
+                setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                )
+                setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
+                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
 
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            codecSurface = codec.createInputSurface()
-            mediaCodec = codec
+            mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+                configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                codecSurface = createInputSurface()
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create MediaCodec encoder: ${e.message}")
             LanRemoteViewModel.instance?.addServerLog(
                 "初始化视频编码器失败: ${e.message}",
                 com.example.ui.LogType.WARNING
@@ -391,7 +381,7 @@ class ScreenCaptureService : Service() {
         codecThread = Thread {
             val bufferInfo = MediaCodec.BufferInfo()
             val vm = LanRemoteViewModel.instance
-            while (isEncoding) {
+            while (isEncoding && !Thread.currentThread().isInterrupted) {
                 try {
                     val codec = mediaCodec ?: break
                     val outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)

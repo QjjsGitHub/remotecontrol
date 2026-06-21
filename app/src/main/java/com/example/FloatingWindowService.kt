@@ -76,7 +76,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
@@ -237,21 +236,14 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                     val targetWidthPx = (windowWidthDp * density).toInt()
                     val targetHeightPx = ((windowHeightDp + 24) * density).toInt()
 
-                    // 只有当目标像素尺寸与当前 WindowManager Params 中的尺寸不符时，才触发更新
                     if (params.width != targetWidthPx || params.height != targetHeightPx) {
                         params.width = targetWidthPx
                         params.height = targetHeightPx
                         try {
                             wm.updateViewLayout(composeView, params)
-                            Log.d(
-                                TAG,
-                                "WindowManager layout updated to: ${params.width}x${params.height}"
-                            )
                         } catch (e: Exception) {
-                            Log.e(TAG, "Update window layout failed: ${e.message}")
+                            LanRemoteViewModel.instance?.addControllerLog("更新悬浮窗尺寸失败: ${e.message}", com.example.ui.LogType.WARNING)
                         }
-                    } else {
-                        Log.d(TAG, "Dimensions unchanged, skipping redundant updateViewLayout")
                     }
                 }
 
@@ -273,13 +265,12 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                 .pointerInput(Unit) {
                                     detectDragGestures { change, dragAmount ->
                                         change.consume()
-                                        // 累加计算拖动坐标并通知 WindowManager 更新布局
                                         params.x += dragAmount.x.toInt()
                                         params.y += dragAmount.y.toInt()
                                         try {
                                             wm.updateViewLayout(composeView, params)
                                         } catch (e: Exception) {
-                                            Log.e(TAG, "Error dragging window: ${e.message}")
+                                            LanRemoteViewModel.instance?.addControllerLog("移动悬浮窗失败: ${e.message}", com.example.ui.LogType.WARNING)
                                         }
                                     }
                                 }
@@ -417,7 +408,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                                             dragStartY = offset.y
                                                         },
                                                         onDragEnd = {},
-                                                        onDrag = { change, dragAmount ->
+                                                        onDrag = { change, _ ->
                                                             change.consume()
                                                             val currentX = change.position.x
                                                             val currentY = change.position.y
@@ -549,8 +540,7 @@ fun VideoSurfaceViewer(
             try {
                 val inputIndex = codec.dequeueInputBuffer(10000)
                 if (inputIndex >= 0) {
-                    val inputBuffer = codec.getInputBuffer(inputIndex)
-                    if (inputBuffer != null) {
+                    codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
                         inputBuffer.clear()
                         inputBuffer.put(bytes)
                         codec.queueInputBuffer(inputIndex, 0, bytes.size, pts, flags)
@@ -564,7 +554,7 @@ fun VideoSurfaceViewer(
                     outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
                 }
             } catch (e: Exception) {
-                Log.e("VideoSurfaceViewer", "视频硬解码切片输入排队失败或数据损毁: ${e.message}")
+                LanRemoteViewModel.instance?.addControllerLog("解码器异常: ${e.message}", com.example.ui.LogType.WARNING)
             }
         }
     }
@@ -575,51 +565,26 @@ fun VideoSurfaceViewer(
                 holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) {
                         try {
-                            val codec =
-                                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val format = MediaFormat.createVideoFormat(
-                                MediaFormat.MIMETYPE_VIDEO_AVC,
-                                videoWidth,
-                                videoHeight
-                            )
+                            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
                             decoder = codec
 
-                            // 首次建立 Surface 时，立即注入此前本地缓存的 SPS/PPS 配置帧 (flags=2)，初始化解码参数以避免画面加载首帧发黑
                             viewModel.clientCodecConfig.value?.let { configFrame ->
                                 try {
                                     val inputIndex = codec.dequeueInputBuffer(10000)
                                     if (inputIndex >= 0) {
-                                        val inputBuffer = codec.getInputBuffer(inputIndex)
-                                        if (inputBuffer != null) {
+                                        codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
                                             inputBuffer.clear()
                                             inputBuffer.put(configFrame.first)
-                                            codec.queueInputBuffer(
-                                                inputIndex,
-                                                0,
-                                                configFrame.first.size,
-                                                configFrame.third,
-                                                configFrame.second
-                                            )
-                                            Log.d(
-                                                "VideoSurfaceViewer",
-                                                "解码器启动时已成功自动填充 SPS/PPS 缓存配置帧, 大小: ${configFrame.first.size}"
-                                            )
+                                            codec.queueInputBuffer(inputIndex, 0, configFrame.first.size, configFrame.third, configFrame.second)
                                         }
                                     }
-                                } catch (e: Exception) {
-                                    Log.e(
-                                        "VideoSurfaceViewer",
-                                        "启动注入 SPS/PPS 缓存特征包失败: ${e.message}"
-                                    )
-                                }
+                                } catch (_: Exception) { }
                             }
                         } catch (e: Exception) {
-                            Log.e(
-                                "VideoSurfaceViewer",
-                                "构建/配置 H.264 解码器实例时报错崩溃: ${e.message}"
-                            )
+                            LanRemoteViewModel.instance?.addControllerLog("构建解码器失败: ${e.message}", com.example.ui.LogType.WARNING)
                         }
                     }
 
