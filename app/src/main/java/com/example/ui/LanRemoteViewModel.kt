@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.RemoteAccessibilityService
 import com.example.ScreenCaptureService
 import com.example.network.ConnectionState
+import com.example.network.NetworkConstants
 import com.example.network.SocketClient
 import com.example.network.SocketServer
 import com.example.network.UdpBroadcaster
@@ -32,6 +33,39 @@ enum class LogType {
     INFO,
     SUCCESS,
     WARNING
+}
+
+/**
+ * ViewModel 相关常量
+ */
+private object ViewModelConstants {
+    /** 最大日志条目数 */
+    const val MAX_LOG_ENTRIES = 255
+
+    /** 默认视频流宽度 */
+    const val DEFAULT_WIDTH = 1080
+
+    /** 默认视频流高度 */
+    const val DEFAULT_HEIGHT = 2400
+
+    /** 录屏缩放比例 */
+    const val CAPTURE_SCALE = 0.8f
+}
+
+/**
+ * IPv4 地址验证
+ */
+private object IpValidator {
+    private const val IPV4_PATTERN = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+
+    /**
+     * 验证字符串是否为有效的 IPv4 地址
+     * @param ip 待验证的 IP 地址字符串
+     * @return 如果有效返回 true，否则返回 false
+     */
+    fun isValidIPv4(ip: String): Boolean {
+        return IPV4_PATTERN.toRegex().matches(ip.trim())
+    }
 }
 
 data class LogEntry(
@@ -65,8 +99,8 @@ class LanRemoteViewModel : ViewModel() {
     val serverLogs: StateFlow<List<LogEntry>> = _serverLogs.asStateFlow()
 
     // 服务端(被控端)的屏幕物理真实宽度和高度尺寸
-    private val _serverWidth = MutableStateFlow(1080)
-    private val _serverHeight = MutableStateFlow(2400)
+    private val _serverWidth = MutableStateFlow(ViewModelConstants.DEFAULT_WIDTH)
+    private val _serverHeight = MutableStateFlow(ViewModelConstants.DEFAULT_HEIGHT)
 
     // 控制端(客户端)状态：连接、正在连接、未连接
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
@@ -100,11 +134,11 @@ class LanRemoteViewModel : ViewModel() {
         _clientCodecConfig.asStateFlow()
 
     // 同步镜像的物理参考大屏宽度
-    private val _mirroredWidth = MutableStateFlow(1080)
+    private val _mirroredWidth = MutableStateFlow(ViewModelConstants.DEFAULT_WIDTH)
     val mirroredWidth: StateFlow<Int> = _mirroredWidth.asStateFlow()
 
     // 同步镜像的物理参考大屏高度
-    private val _mirroredHeight = MutableStateFlow(2400)
+    private val _mirroredHeight = MutableStateFlow(ViewModelConstants.DEFAULT_HEIGHT)
     val mirroredHeight: StateFlow<Int> = _mirroredHeight.asStateFlow()
 
     // 悬浮窗的缩放比例状态流，默认设为 1.0f (基准为客户端屏幕宽度的 1/3)
@@ -148,7 +182,7 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addServerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _serverLogs.value = listOf(entry) + _serverLogs.value.take(255)
+        _serverLogs.value = listOf(entry) + _serverLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
     }
 
     /**
@@ -158,7 +192,7 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addControllerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _controllerLogs.value = listOf(entry) + _controllerLogs.value.take(255)
+        _controllerLogs.value = listOf(entry) + _controllerLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
     }
 
     /**
@@ -190,27 +224,12 @@ class LanRemoteViewModel : ViewModel() {
             val ip = withContext(Dispatchers.IO) { getLocalIpAddress() }
             _serverIp.value = ip
 
-            // 开启 TCP 套接字监听：对准端口 9292
+            // 开启 TCP 套接字监听
             socketServer = SocketServer(
-                port = 9292,
+                port = NetworkConstants.TCP_PORT,
                 onClientConnected = { clientIp ->
                     _connectedClients.value = (_connectedClients.value + clientIp).distinct()
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
-
-                    // 新的客户端连接时，立即向其同步当前服务端的坐标尺寸与微缩流画幅大小
-                    /*var captureWidth = (_serverWidth.value * 0.35f).toInt()
-                    var captureHeight = (_serverHeight.value * 0.35f).toInt()
-                    captureWidth = (captureWidth / 16) * 16
-                    captureHeight = (captureHeight / 16) * 16
-                    if (captureWidth <= 0) captureWidth = 360
-                    if (captureHeight <= 0) captureHeight = 640
-
-                    val sizeMsg = "SIZE:$_serverWidth.value,$_serverHeight.value,$captureWidth,$captureHeight".toByteArray(Charsets.UTF_8)
-                    val buffer = java.nio.ByteBuffer.allocate(1 + sizeMsg.size)
-                    buffer.put(3.toByte())
-                    buffer.put(sizeMsg)
-
-                    socketServer?.broadcastData(buffer.array())*/
 
                     updateScreenSize()
 
@@ -229,8 +248,8 @@ class LanRemoteViewModel : ViewModel() {
             )
             socketServer?.start()
 
-            // 建立局域网 UDP 定时广播器：面向端口 9293
-            udpBroadcaster = UdpBroadcaster(serverIp = ip, port = 9293)
+            // 建立局域网 UDP 定时广播器
+            udpBroadcaster = UdpBroadcaster(serverIp = ip, port = NetworkConstants.UDP_PORT)
             udpBroadcaster?.start()
 
             _isServerRunning.value = true
@@ -282,26 +301,23 @@ class LanRemoteViewModel : ViewModel() {
         // 自动判定旋转状态：0 竖屏，1 横屏
         val rotation = if (width > height) 1 else 0
 
-        var captureWidth = ((width * 0.8).toInt() / 16) * 16
-        var captureHeight = ((height * 0.8).toInt() / 16) * 16
-        if (captureWidth <= 0) captureWidth = 1080
-        if (captureHeight <= 0) captureHeight = 2400
+        var captureWidth = ((width * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
+        var captureHeight = ((height * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = ViewModelConstants.DEFAULT_WIDTH
+        if (captureHeight <= 0) captureHeight = ViewModelConstants.DEFAULT_HEIGHT
 
         addServerLog(
             "本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight}), 旋转状态: $rotation",
             LogType.INFO
         )
-        //socketServer?.broadcastMessage("SIZE:$width,$height,$captureWidth,$captureHeight")
-
         // 构造二进制包：1 byte(类型:3代表SIZE) + N bytes(字符串数据)
-        // 修改协议串：增加第五个参数 rotation
         val sizeMsg =
             "SIZE:$captureWidth,$captureHeight,$rotation".toByteArray(Charsets.UTF_8)
         val buffer = java.nio.ByteBuffer.allocate(1 + sizeMsg.size)
-        buffer.put(3.toByte()) // TYPE_SIZE
+        buffer.put(NetworkConstants.TYPE_SIZE.toByte())
         buffer.put(sizeMsg)
 
-        socketServer?.broadcastData(buffer.array()) // 注意这里方法名改为了 broadcastData
+        socketServer?.broadcastData(buffer.array())
     }
 
 
@@ -309,7 +325,7 @@ class LanRemoteViewModel : ViewModel() {
     fun onEncodedFrameCaptured(data: ByteArray, flags: Int, presentationTimeUs: Long) {
         // 构造二进制包：1 byte(类型:2代表视频) + 4 bytes(Flags) + 8 bytes(PTS) + N bytes(视频数据)
         val buffer = java.nio.ByteBuffer.allocate(1 + 4 + 8 + data.size)
-        buffer.put(2.toByte())
+        buffer.put(NetworkConstants.TYPE_VIDEO.toByte())
         buffer.putInt(flags)
         buffer.putLong(presentationTimeUs)
         buffer.put(data)
@@ -343,18 +359,22 @@ class LanRemoteViewModel : ViewModel() {
                         val injected = RemoteAccessibilityService.performTap(originalX, originalY)
                         if (injected) {
                             addServerLog(
-                                "成功模拟点击坐标: (${originalX.toInt()}, ${originalY.toInt()})",
+                                "[$clientIp] 成功模拟点击坐标: (${originalX.toInt()}, ${originalY.toInt()})",
                                 LogType.SUCCESS
                             )
                         } else {
                             addServerLog(
-                                "模拟点击失败: 辅助功能运行状态 [${RemoteAccessibilityService.isServiceRunning()}]",
+                                "[$clientIp] 模拟点击失败: 辅助功能运行状态 [${RemoteAccessibilityService.isServiceRunning()}]",
                                 LogType.WARNING
                             )
                         }
                     }
+                } catch (e: NumberFormatException) {
+                    addServerLog("[$clientIp] TAP 命令格式错误: 坐标解析失败", LogType.WARNING)
+                    Log.e(TAG, "TAP 坐标解析异常: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "解析 TAP 触控命令由于异常崩溃: ${e.message}")
+                    addServerLog("[$clientIp] TAP 命令处理异常: ${e.javaClass.simpleName}", LogType.WARNING)
+                    Log.e(TAG, "TAP 处理异常", e)
                 }
             }
 
@@ -378,17 +398,29 @@ class LanRemoteViewModel : ViewModel() {
                             val injected = RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)
                             if (injected) {
                                 addServerLog(
-                                    "成功模拟滑动: (${sx.toInt()}, ${sy.toInt()}) -> (${ex.toInt()}, ${ey.toInt()})",
+                                    "[$clientIp] 成功模拟滑动: (${sx.toInt()}, ${sy.toInt()}) -> (${ex.toInt()}, ${ey.toInt()})",
                                     LogType.SUCCESS
                                 )
                             } else {
-                                addServerLog("模拟滑动失败: 轴值映射验证失败", LogType.WARNING)
+                                addServerLog("[$clientIp] 模拟滑动失败: 辅助功能状态异常", LogType.WARNING)
                             }
+                        } else {
+                            addServerLog("[$clientIp] SWIPE 命令格式错误: 路径点数量不足", LogType.WARNING)
                         }
+                    } else {
+                        addServerLog("[$clientIp] SWIPE 命令格式错误: 缺少路径分隔符", LogType.WARNING)
                     }
+                } catch (e: NumberFormatException) {
+                    addServerLog("[$clientIp] SWIPE 命令格式错误: 坐标解析失败", LogType.WARNING)
+                    Log.e(TAG, "SWIPE 坐标解析异常: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "解析 SWIPE 滑动命令错误: ${e.message}")
+                    addServerLog("[$clientIp] SWIPE 命令处理异常: ${e.javaClass.simpleName}", LogType.WARNING)
+                    Log.e(TAG, "SWIPE 处理异常", e)
                 }
+            }
+
+            else -> {
+                addServerLog("[$clientIp] 未知命令: ${command.take(20)}...", LogType.WARNING)
             }
         }
     }
@@ -404,7 +436,7 @@ class LanRemoteViewModel : ViewModel() {
     fun startDiscovery() {
         _discoveredServers.value = emptySet()
         udpListener?.stop()
-        udpListener = UdpListener(port = 9293) { ip ->
+        udpListener = UdpListener(port = NetworkConstants.UDP_PORT) { ip ->
             val set = _discoveredServers.value.toMutableSet()
             if (set.add(ip)) {
                 _discoveredServers.value = set
@@ -465,8 +497,8 @@ class LanRemoteViewModel : ViewModel() {
                 if (message.startsWith("SIZE:")) {
                     val sizes = message.substringAfter("SIZE:").split(",")
                     if (sizes.size >= 3) {
-                        _mirroredWidth.value = sizes[0].toIntOrNull() ?: 1080
-                        _mirroredHeight.value = sizes[1].toIntOrNull() ?: 2400
+                        _mirroredWidth.value = sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
+                        _mirroredHeight.value = sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
                         val rotation = sizes[2].toIntOrNull() ?: 0
                         addControllerLog(
                             "同步远端屏幕状态: 镜像宽:${_mirroredWidth.value}  镜像高:${_mirroredHeight.value} " +
@@ -488,13 +520,18 @@ class LanRemoteViewModel : ViewModel() {
     fun connectToSelectedServer(context: Context) {
         val ip = _manualIpField.value.trim()
         if (ip.isEmpty()) {
-            addControllerLog("连接失败: Server IP 不能为空码", LogType.WARNING)
+            addControllerLog("连接失败: Server IP 不能为空", LogType.WARNING)
+            return
+        }
+
+        if (!IpValidator.isValidIPv4(ip)) {
+            addControllerLog("连接失败: IP 格式无效 [$ip]", LogType.WARNING)
             return
         }
 
         disconnectFromServer()
 
-        addControllerLog("正在尝试打通通道连接 $ip ...", LogType.INFO)
+        addControllerLog("正在尝试连接服务端: $ip:${NetworkConstants.TCP_PORT} ...", LogType.INFO)
         socketClient = SocketClient(
             serverIp = ip,
             onStateChanged = { state ->
