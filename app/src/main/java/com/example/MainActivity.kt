@@ -55,14 +55,11 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,12 +80,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
 import com.example.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
-import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : ComponentActivity() {
 

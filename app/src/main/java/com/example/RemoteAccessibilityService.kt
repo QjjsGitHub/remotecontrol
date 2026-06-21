@@ -5,6 +5,8 @@ import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.example.ui.LanRemoteViewModel
+import com.example.ui.LogType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -114,8 +116,16 @@ class RemoteAccessibilityService : AccessibilityService() {
      * @param event 系统拦截并产生的分发事件
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 无需监听或截获任何系统的无障碍事件流，此服务纯粹用作全局手势注入器
-        Log.d("onAccessibilityEvent", event.toString())
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // 至少读取一些信息，证明服务在工作
+                LanRemoteViewModel.instance?.addServerLog(
+                    event.contentDescription.toString(),
+                    LogType.INFO
+                )
+            }
+        }
     }
 
     /**

@@ -268,15 +268,16 @@ class SocketClient(
     // 客户端发送控制指令依然可以是 String，但底层包装成二进制包发送
     fun sendCommand(command: String): Boolean {
         val out = outputStream
+        var response = false
         if (out != null && socket?.isConnected == true) {
-            var response = true
             scope.launch {
                 try {
                     val bytes = command.toByteArray(Charsets.UTF_8)
                     out.writeInt(bytes.size)
                     out.write(bytes)
                     out.flush()
-                } catch (e: SocketException) {
+                    response = true
+                } catch (_: SocketException) {
                     Log.w(TAG, "发送指令失败: 连接已断开")
                     response = false
                 } catch (e: Exception) {

@@ -50,7 +50,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.node.Ref
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -72,7 +71,6 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -540,17 +538,11 @@ fun VideoSurfaceViewer(
 ) {
     val videoWidth by viewModel.mirroredWidth.collectAsState()
     val videoHeight by viewModel.mirroredHeight.collectAsState()
-    val decoderRef = remember { Ref<MediaCodec>() }
+    var decoder by remember { mutableStateOf<MediaCodec?>(null) }
 
-    LaunchedEffect(viewModel) {
+    LaunchedEffect(viewModel, decoder) {
+        val codec = decoder ?: return@LaunchedEffect
         viewModel.encodedFrameFlow.collect { frameInfo ->
-
-            //todo
-            var codec = decoderRef.value
-            while (codec == null) {
-                delay(50.milliseconds)
-                codec = decoderRef.value
-            }
             val bytes = frameInfo.first
             val flags = frameInfo.second
             val pts = frameInfo.third
@@ -592,7 +584,7 @@ fun VideoSurfaceViewer(
                             )
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
-                            decoderRef.value = codec
+                            decoder = codec
 
                             // 首次建立 Surface 时，立即注入此前本地缓存的 SPS/PPS 配置帧 (flags=2)，初始化解码参数以避免画面加载首帧发黑
                             viewModel.clientCodecConfig.value?.let { configFrame ->
@@ -640,16 +632,17 @@ fun VideoSurfaceViewer(
                     }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        val activeCodec = decoder
+                        decoder = null
                         try {
-                            decoderRef.value?.stop()
-                            decoderRef.value?.release()
+                            activeCodec?.stop()
+                            activeCodec?.release()
                         } catch (e: Exception) {
                             Log.e(
                                 "VideoSurfaceViewer",
                                 "销毁解码器或回收物理内存失败: ${e.message}"
                             )
                         }
-                        decoderRef.value = null
                     }
                 })
             }
