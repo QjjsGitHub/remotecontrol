@@ -409,6 +409,23 @@ class LanRemoteViewModel : ViewModel() {
                         }
                     }
                 }
+
+                command == "BACK" -> {
+                    if (RemoteAccessibilityService.performBack()) {
+                        addServerLog("[$clientIp] 模拟返回", LogType.SUCCESS)
+                    } else {
+                        addServerLog("[$clientIp] 返回失败: 无障碍服务未运行", LogType.WARNING)
+                    }
+                }
+
+                command == "HOME" -> {
+                    if (RemoteAccessibilityService.performHome()) {
+                        addServerLog("[$clientIp] 模拟回到主页", LogType.SUCCESS)
+                    } else {
+                        addServerLog("[$clientIp] 回到主页失败: 无障碍服务未运行", LogType.WARNING)
+                    }
+                }
+
                 else -> addServerLog("[$clientIp] 未知指令: $command", LogType.WARNING)
             }
         } catch (e: Exception) {

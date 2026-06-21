@@ -27,12 +27,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -231,6 +231,9 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 val windowWidthDp = clientScreenWidthDp * scaleMultiplier
                 val windowHeightDp = windowWidthDp * aspectRatio
 
+                // 判定是否处于紧凑模式（宽度过小时隐藏次要按钮）
+                val isCompact = windowWidthDp < 180
+
                 // 强制将 Compose 计算出的 DP 尺寸同步给系统 WindowManager 的 LayoutParams，
                 // 从而绕过 WRAP_CONTENT 可能存在的 320dp 或屏幕边界测量限制。
                 LaunchedEffect(windowWidthDp, windowHeightDp) {
@@ -244,7 +247,10 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                         try {
                             wm.updateViewLayout(composeView, params)
                         } catch (e: Exception) {
-                            LanRemoteViewModel.instance?.addControllerLog("更新悬浮窗尺寸失败: ${e.message}", com.example.ui.LogType.WARNING)
+                            LanRemoteViewModel.instance?.addControllerLog(
+                                "更新悬浮窗尺寸失败: ${e.message}",
+                                com.example.ui.LogType.WARNING
+                            )
                         }
                     }
                 }
@@ -258,7 +264,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
 
-                        // 顶部操作手柄栏 (高36dp) — 拦截并响应物理手势，使整个悬浮窗在系统桌面上无缝拖拽移动
+                        // 顶部操作手柄栏 (高24dp)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -272,59 +278,80 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                         try {
                                             wm.updateViewLayout(composeView, params)
                                         } catch (e: Exception) {
-                                            LanRemoteViewModel.instance?.addControllerLog("移动悬浮窗失败: ${e.message}", com.example.ui.LogType.WARNING)
+                                            LanRemoteViewModel.instance?.addControllerLog(
+                                                "移动悬浮窗失败: ${e.message}",
+                                                com.example.ui.LogType.WARNING
+                                            )
                                         }
                                     }
                                 }
-                                .padding(horizontal = 8.dp),
+                                .padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            // 1. 状态文字 (仅在非紧凑模式显示)
+                            if (!isCompact) {
                                 Text(
-                                    text = if (isTouchLocked) "尺缩调节中 (${(scaleMultiplier * 100).toInt()}%)" else "后台控屏中 (${(scaleMultiplier * 100).toInt()}%)",
+                                    text = if (isTouchLocked) "缩放中: ${(scaleMultiplier * 100).toInt()}%" else "控屏中:${(scaleMultiplier * 100).toInt()}%",
                                     color = Color.White,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    textAlign = TextAlign.Center
                                 )
-                            }
 
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                // 触摸锁定/解锁按钮：锁定状态支持对端大小缩放，解锁状态支持控制下发
+                                // 2. 返回按钮 (仅在非紧凑模式显示)
+
                                 IconButton(
-                                    onClick = { isTouchLocked = !isTouchLocked },
+                                    onClick = { viewModel.sendClientAction("BACK") },
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = "Toggle Touch Lock for Pinch Sizing",
-                                        tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White.copy(
-                                            alpha = 0.6f
-                                        ),
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = Color.White,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(6.dp))
+                            }
 
-                                // 独立关闭小按钮
-                                IconButton(
-                                    onClick = { stopSelf() },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Close Floating Window",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                            // 3. Home 按钮 (仅在非紧凑模式显示)
+                            IconButton(
+                                onClick = { viewModel.sendClientAction("HOME") },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Home,
+                                    contentDescription = "Home",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            // 4. 触摸锁定按钮 (必须显示)
+                            IconButton(
+                                onClick = { isTouchLocked = !isTouchLocked },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Lock",
+                                    tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            // 5. 关闭按钮 (必须显示)
+                            IconButton(
+                                onClick = { stopSelf() },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
 
@@ -345,7 +372,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                         kotlinx.coroutines.delay(100.milliseconds)
                                         try {
                                             wm.updateViewLayout(composeView, params)
-                                        } catch (_: Exception) {}
+                                        } catch (_: Exception) {
+                                        }
                                     }
 
                                     Box(
@@ -529,7 +557,7 @@ fun VideoSurfaceViewer(
 ) {
     val videoWidth by viewModel.mirroredWidth.collectAsState()
     val videoHeight by viewModel.mirroredHeight.collectAsState()
-    
+
     // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
     var decoderToken by remember { mutableIntStateOf(0) }
     var decoder by remember { mutableStateOf<MediaCodec?>(null) }
@@ -557,7 +585,10 @@ fun VideoSurfaceViewer(
                     outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
                 }
             } catch (e: Exception) {
-                viewModel.addControllerLog("解码推流失败: ${e.message}", com.example.ui.LogType.WARNING)
+                viewModel.addControllerLog(
+                    "解码推流失败: ${e.message}",
+                    com.example.ui.LogType.WARNING
+                )
             }
         }
     }
@@ -568,19 +599,33 @@ fun VideoSurfaceViewer(
                 holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) {
                         try {
-                            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
+                            val codec =
+                                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            val format = MediaFormat.createVideoFormat(
+                                MediaFormat.MIMETYPE_VIDEO_AVC,
+                                videoWidth,
+                                videoHeight
+                            )
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
-                            
+
                             decoder = codec
                             decoderToken++ // 强制重启 LaunchedEffect
                         } catch (e: Exception) {
-                            viewModel.addControllerLog("构建解码器失败: ${e.message}", com.example.ui.LogType.WARNING)
+                            viewModel.addControllerLog(
+                                "构建解码器失败: ${e.message}",
+                                com.example.ui.LogType.WARNING
+                            )
                         }
                     }
 
-                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+                    override fun surfaceChanged(
+                        holder: SurfaceHolder,
+                        format: Int,
+                        w: Int,
+                        h: Int
+                    ) {
+                    }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
                         val activeCodec = decoder
@@ -588,7 +633,8 @@ fun VideoSurfaceViewer(
                         try {
                             activeCodec?.stop()
                             activeCodec?.release()
-                        } catch (_: Exception) { }
+                        } catch (_: Exception) {
+                        }
                     }
                 })
             }

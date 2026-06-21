@@ -82,6 +82,20 @@ class RemoteAccessibilityService : AccessibilityService() {
             return inst.dispatchGesture(builder.build(), null, null)
         }
 
+        /**
+         * 执行系统级的返回键操作
+         */
+        fun performBack(): Boolean {
+            return instance?.performGlobalAction(GLOBAL_ACTION_BACK) ?: false
+        }
+
+        /**
+         * 执行系统级的回到桌面操作
+         */
+        fun performHome(): Boolean {
+            return instance?.performGlobalAction(GLOBAL_ACTION_HOME) ?: false
+        }
+
     }
 
     /**
