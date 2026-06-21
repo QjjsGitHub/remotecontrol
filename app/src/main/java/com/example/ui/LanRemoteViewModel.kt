@@ -90,7 +90,7 @@ class LanRemoteViewModel : ViewModel() {
 
     // 未合并累积的视频流数据切片热流，提供给悬浮窗底层的 MediaCodec 硬件解码器直接读取
     private val _encodedFrameFlow =
-        MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 128)
+        MutableSharedFlow<Triple<ByteArray, Int, Long>>(extraBufferCapacity = 32)
     val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> =
         _encodedFrameFlow.asSharedFlow()
 
@@ -148,7 +148,7 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addServerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _serverLogs.value = listOf(entry) + _serverLogs.value
+        _serverLogs.value = listOf(entry) + _serverLogs.value.take(255)
     }
 
     /**
@@ -158,7 +158,7 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addControllerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _controllerLogs.value = listOf(entry) + _controllerLogs.value
+        _controllerLogs.value = listOf(entry) + _controllerLogs.value.take(255)
     }
 
     /**

@@ -55,12 +55,14 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +83,9 @@ import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -180,12 +185,27 @@ fun SimplifiedDashboardScreen(
 
     var isBgOverlayActive by remember { mutableStateOf(false) }
 
-    // 定时轮询被控端所需的系统级无障碍状态服务与桌面悬浮窗状态服务是否正在处于健康运行中
-    LaunchedEffect(Unit) {
-        while (true) {
-            isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
-            isBgOverlayActive = FloatingWindowService.isRunning
-            delay(1500.milliseconds)
+    // 在 MainActivity 或 Composable UI 中
+    val scope = rememberCoroutineScope()
+
+    // 使用 DisposableEffect 来管理 Job 的生命周期
+    DisposableEffect(Unit) {
+        // 1. 启动协程并保存 Job 引用
+        val pollingJob = scope.launch {
+            try {
+                while (isActive) { // 检查协程是否仍然活跃
+                    isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
+                    isBgOverlayActive = FloatingWindowService.isRunning
+                    delay(1500.milliseconds)
+                }
+            } catch (e: CancellationException) {
+                // 协程被正常取消，可以在这里做清理工作
+            }
+        }
+
+        // 2. 在组件销毁（onDispose）时显式管理
+        onDispose {
+            pollingJob.cancel() // 显式取消，防止资源浪费
         }
     }
 
