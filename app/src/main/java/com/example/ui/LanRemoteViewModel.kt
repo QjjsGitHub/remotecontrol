@@ -2,7 +2,6 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
-import android.media.MediaCodec
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -215,7 +214,7 @@ class LanRemoteViewModel : ViewModel() {
      * 开启局域网共控服务端，初始化并启动 TCP 服务和局域网嗅探探测广播
      * @param context 加载上下文，启动多媒体录屏及辅助服务等需要
      */
-    fun startServer(context: Context) {
+    fun startServer() {
         if (_isServerRunning.value) return
 
         viewModelScope.launch {
@@ -235,7 +234,7 @@ class LanRemoteViewModel : ViewModel() {
                     addServerLog("客户端已断开: $clientIp", LogType.WARNING)
                 },
                 onCommandReceived = { clientIp, command ->
-                    handleReceivedCommand(context, clientIp, command)
+                    handleReceivedCommand(clientIp, command)
                 },
                 onError = { error ->
                     addServerLog(error, LogType.WARNING)
@@ -339,7 +338,7 @@ class LanRemoteViewModel : ViewModel() {
      * @param clientIp 来源端的 IP 地址
      * @param command 命令参数协议串
      */
-    private fun handleReceivedCommand(context: Context, clientIp: String, command: String) {
+    private fun handleReceivedCommand(clientIp: String, command: String) {
         try {
             when {
                 command.startsWith("TAP:") -> {
@@ -450,7 +449,7 @@ class LanRemoteViewModel : ViewModel() {
             val type = buffer.get().toInt()
 
             when (type) {
-                2 -> { // TYPE_VIDEO
+                NetworkConstants.TYPE_VIDEO -> { // TYPE_VIDEO
                     val flags = buffer.int
                     val pts = buffer.long
                     val data = ByteArray(buffer.remaining())
@@ -459,7 +458,7 @@ class LanRemoteViewModel : ViewModel() {
                     _encodedFrameFlow.tryEmit(frame)
                     _hasFrameReceived.value = true
                 }
-                3 -> { // TYPE_SIZE
+                NetworkConstants.TYPE_SIZE -> { // TYPE_SIZE
                     val message = String(ByteArray(buffer.remaining()).apply { buffer.get(this) }, Charsets.UTF_8)
                     if (message.startsWith("SIZE:")) {
                         val sizes = message.substringAfter("SIZE:").split(",")
@@ -481,7 +480,7 @@ class LanRemoteViewModel : ViewModel() {
      * 连接到用户在输入框或选择列表中指定的 TCP 服务端主机节点
      * @param context 加载上下文，以便需要时发起悬浮窗独立受控界面的弹窗与授权启动
      */
-    fun connectToSelectedServer(context: Context) {
+    fun connectToSelectedServer() {
         val ip = _manualIpField.value.trim()
         if (ip.isEmpty()) {
             addControllerLog("连接失败: Server IP 不能为空", LogType.WARNING)

@@ -76,6 +76,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
@@ -212,6 +213,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 val hasFrameReceived by viewModel.hasFrameReceived.collectAsState()
                 val mirroredWidth by viewModel.mirroredWidth.collectAsState()
                 val mirroredHeight by viewModel.mirroredHeight.collectAsState()
+                val connectionState by viewModel.connectionState.collectAsState()
 
                 // 获取客户端当前屏幕配置，用于自适应基准宽度计算
                 val configuration = LocalConfiguration.current
@@ -339,125 +341,130 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                 .fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            val hasFrame = hasFrameReceived
-                            if (hasFrame) {
+                            if (hasFrameReceived) {
                                 var localViewW by remember { mutableIntStateOf(1) }
                                 var localViewH by remember { mutableIntStateOf(1) }
 
-                                //key(videoWidth, videoHeight) {
+                                // 【关键修复点】使用 connectionState 作为 key 强制重置生命周期
+                                androidx.compose.runtime.key(connectionState) {
+                                    // 【核心唤醒逻辑】组件挂载后延迟捅一下 WindowManager，确保 SurfaceView 被系统激活触发 surfaceCreated
+                                    LaunchedEffect(Unit) {
+                                        kotlinx.coroutines.delay(100.milliseconds)
+                                        try {
+                                            wm.updateViewLayout(composeView, params)
+                                        } catch (_: Exception) {}
+                                    }
 
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        // 监听双指手势缩放画面（仅在触摸锁定状态下生效，并更新全局 ViewModel 比例使与 Slider 同步）
-                                        .pointerInput(isTouchLocked) {
-                                            if (isTouchLocked) {
-                                                detectTransformGestures { _, _, zoom, _ ->
-                                                    val newScale =
-                                                        (scaleMultiplier * zoom).coerceIn(
-                                                            0.2f,
-                                                            0.8f
-                                                        )
-                                                    viewModel.updateFloatingScaleMultiplier(
-                                                        newScale
-                                                    )
-                                                }
-                                            }
-                                        }
-                                )
-                                {
-                                    VideoSurfaceViewer(
-                                        viewModel = viewModel,
+                                    Box(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .onSizeChanged { size ->
-                                                // 记录并缓存当前悬浮窗真实的物理显示宽高
-                                                localViewW = size.width
-                                                localViewH = size.height
-                                            }
-                                            // 监听点击手势 (仅在解锁/未锁定状态下响应反向控制)
-                                            .pointerInput(
-                                                localViewW,
-                                                localViewH,
-                                                isTouchLocked
-                                            ) {
-                                                if (!isTouchLocked) {
-                                                    detectTapGestures(
-                                                        onTap = { offset ->
-                                                            if (localViewW > 0 && localViewH > 0) {
-                                                                val rx = offset.x / localViewW
-                                                                val ry = offset.y / localViewH
-                                                                viewModel.sendClientAction("TAP:$rx,$ry")
-                                                            }
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                            // 监听滑动划扫手势 (仅在解锁/未锁定状态下响应反向控制)
-                                            .pointerInput(
-                                                localViewW,
-                                                localViewH,
-                                                isTouchLocked
-                                            ) {
-                                                if (!isTouchLocked) {
-                                                    var dragStartX = 0f
-                                                    var dragStartY = 0f
-                                                    detectDragGestures(
-                                                        onDragStart = { offset ->
-                                                            dragStartX = offset.x
-                                                            dragStartY = offset.y
-                                                        },
-                                                        onDragEnd = {},
-                                                        onDrag = { change, _ ->
-                                                            change.consume()
-                                                            val currentX = change.position.x
-                                                            val currentY = change.position.y
-                                                            if (localViewW > 0 && localViewH > 0) {
-                                                                val rsx =
-                                                                    dragStartX / localViewW
-                                                                val rsy =
-                                                                    dragStartY / localViewH
-                                                                val rex = currentX / localViewW
-                                                                val rey = currentY / localViewH
-                                                                viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
-                                                            }
-                                                        }
-                                                    )
+                                            // 监听双指手势缩放画面（仅在触摸锁定状态下生效，并更新全局 ViewModel 比例使与 Slider 同步）
+                                            .pointerInput(isTouchLocked) {
+                                                if (isTouchLocked) {
+                                                    detectTransformGestures { _, _, zoom, _ ->
+                                                        val newScale =
+                                                            (scaleMultiplier * zoom).coerceIn(
+                                                                0.2f,
+                                                                0.8f
+                                                            )
+                                                        viewModel.updateFloatingScaleMultiplier(
+                                                            newScale
+                                                        )
+                                                    }
                                                 }
                                             }
                                     )
-
-                                    // 锁定状态下的半透明遮罩与手势提示 HUD
-                                    if (isTouchLocked) {
-                                        Box(
+                                    {
+                                        VideoSurfaceViewer(
+                                            viewModel = viewModel,
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .background(Color.Black.copy(alpha = 0.45f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Lock,
-                                                    contentDescription = "Pinch to zoom mode active",
-                                                    tint = Color(0xFFFF5252),
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                                Spacer(modifier = Modifier.height(6.dp))
-                                                Text(
-                                                    text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
-                                                    color = Color.White,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    textAlign = TextAlign.Center,
-                                                    lineHeight = 14.sp
-                                                )
+                                                .onSizeChanged { size ->
+                                                    // 记录并缓存当前悬浮窗真实的物理显示宽高
+                                                    localViewW = size.width
+                                                    localViewH = size.height
+                                                }
+                                                // 监听点击手势 (仅在解锁/未锁定状态下响应反向控制)
+                                                .pointerInput(
+                                                    localViewW,
+                                                    localViewH,
+                                                    isTouchLocked
+                                                ) {
+                                                    if (!isTouchLocked) {
+                                                        detectTapGestures(
+                                                            onTap = { offset ->
+                                                                if (localViewW > 0 && localViewH > 0) {
+                                                                    val rx = offset.x / localViewW
+                                                                    val ry = offset.y / localViewH
+                                                                    viewModel.sendClientAction("TAP:$rx,$ry")
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                                // 监听滑动划扫手势 (仅在解锁/未锁定状态下响应反向控制)
+                                                .pointerInput(
+                                                    localViewW,
+                                                    localViewH,
+                                                    isTouchLocked
+                                                ) {
+                                                    if (!isTouchLocked) {
+                                                        var dragStartX = 0f
+                                                        var dragStartY = 0f
+                                                        detectDragGestures(
+                                                            onDragStart = { offset ->
+                                                                dragStartX = offset.x
+                                                                dragStartY = offset.y
+                                                            },
+                                                            onDragEnd = {},
+                                                            onDrag = { change, _ ->
+                                                                change.consume()
+                                                                val currentX = change.position.x
+                                                                val currentY = change.position.y
+                                                                if (localViewW > 0 && localViewH > 0) {
+                                                                    val rsx =
+                                                                        dragStartX / localViewW
+                                                                    val rsy =
+                                                                        dragStartY / localViewH
+                                                                    val rex = currentX / localViewW
+                                                                    val rey = currentY / localViewH
+                                                                    viewModel.sendClientAction("SWIPE:$rsx,$rsy;$rex,$rey")
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                        )
+
+                                        // 锁定状态下的半透明遮罩与手势提示 HUD
+                                        if (isTouchLocked) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(Color.Black.copy(alpha = 0.45f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Lock,
+                                                        contentDescription = "Pinch to zoom mode active",
+                                                        tint = Color(0xFFFF5252),
+                                                        modifier = Modifier.size(24.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text(
+                                                        text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
+                                                        color = Color.White,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        textAlign = TextAlign.Center,
+                                                        lineHeight = 14.sp
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
-
-                                //}
-
                             } else {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
@@ -529,9 +536,12 @@ fun VideoSurfaceViewer(
 ) {
     val videoWidth by viewModel.mirroredWidth.collectAsState()
     val videoHeight by viewModel.mirroredHeight.collectAsState()
+    
+    // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
+    var decoderToken by remember { mutableIntStateOf(0) }
     var decoder by remember { mutableStateOf<MediaCodec?>(null) }
 
-    LaunchedEffect(viewModel, decoder) {
+    LaunchedEffect(viewModel, decoderToken) {
         val codec = decoder ?: return@LaunchedEffect
         viewModel.encodedFrameFlow.collect { frameInfo ->
             val bytes = frameInfo.first
@@ -554,7 +564,7 @@ fun VideoSurfaceViewer(
                     outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
                 }
             } catch (e: Exception) {
-                LanRemoteViewModel.instance?.addControllerLog("解码器异常: ${e.message}", com.example.ui.LogType.WARNING)
+                viewModel.addControllerLog("解码推流失败: ${e.message}", com.example.ui.LogType.WARNING)
             }
         }
     }
@@ -569,19 +579,15 @@ fun VideoSurfaceViewer(
                             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
+                            
                             decoder = codec
+                            decoderToken++ // 强制重启 LaunchedEffect
                         } catch (e: Exception) {
-                            LanRemoteViewModel.instance?.addControllerLog("构建解码器失败: ${e.message}", com.example.ui.LogType.WARNING)
+                            viewModel.addControllerLog("构建解码器失败: ${e.message}", com.example.ui.LogType.WARNING)
                         }
                     }
 
-                    override fun surfaceChanged(
-                        holder: SurfaceHolder,
-                        format: Int,
-                        w: Int,
-                        h: Int
-                    ) {
-                    }
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
                         val activeCodec = decoder
@@ -589,12 +595,7 @@ fun VideoSurfaceViewer(
                         try {
                             activeCodec?.stop()
                             activeCodec?.release()
-                        } catch (e: Exception) {
-                            Log.e(
-                                "VideoSurfaceViewer",
-                                "销毁解码器或回收物理内存失败: ${e.message}"
-                            )
-                        }
+                        } catch (_: Exception) { }
                     }
                 })
             }

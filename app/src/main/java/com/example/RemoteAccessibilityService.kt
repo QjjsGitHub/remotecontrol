@@ -2,6 +2,7 @@ package com.example
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.annotation.SuppressLint
 import android.graphics.Path
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * 远程触控辅助输入服务 (RemoteAccessibilityService)
  * 继承自系统的 AccessibilityService，用于在被控制端(服务端)模拟全局的触摸、滑动等手势操作。
  */
+@SuppressLint("AccessibilityPolicy")
 class RemoteAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -80,13 +82,6 @@ class RemoteAccessibilityService : AccessibilityService() {
             return inst.dispatchGesture(builder.build(), null, null)
         }
 
-        /**
-         * 获取当前触控辅助服务的存活运行状态
-         * @return 服务如果已被系统激活并绑定则返回 true，否则返回 false
-         */
-        fun isServiceRunning(): Boolean {
-            return isRunning.value
-        }
     }
 
     /**
@@ -117,8 +112,11 @@ class RemoteAccessibilityService : AccessibilityService() {
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                Log.d("onAccessibilityEvent", "TYPE_WINDOW_CONTENT_CHANGED")
+            }
+
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
 
                 // 只在窗口变化时记录，避免过于频繁
                 val packageName = event.packageName?.toString() ?: "unknown"
@@ -127,6 +125,7 @@ class RemoteAccessibilityService : AccessibilityService() {
                     LogType.INFO
                 )
             }
+            else -> {}
         }
     }
 
