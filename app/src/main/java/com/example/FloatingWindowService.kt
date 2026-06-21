@@ -570,19 +570,6 @@ fun VideoSurfaceViewer(
                             codec.configure(format, holder.surface, null, 0)
                             codec.start()
                             decoder = codec
-
-                            viewModel.clientCodecConfig.value?.let { configFrame ->
-                                try {
-                                    val inputIndex = codec.dequeueInputBuffer(10000)
-                                    if (inputIndex >= 0) {
-                                        codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
-                                            inputBuffer.clear()
-                                            inputBuffer.put(configFrame.first)
-                                            codec.queueInputBuffer(inputIndex, 0, configFrame.first.size, configFrame.third, configFrame.second)
-                                        }
-                                    }
-                                } catch (_: Exception) { }
-                            }
                         } catch (e: Exception) {
                             LanRemoteViewModel.instance?.addControllerLog("构建解码器失败: ${e.message}", com.example.ui.LogType.WARNING)
                         }

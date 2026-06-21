@@ -129,10 +129,6 @@ class LanRemoteViewModel : ViewModel() {
     val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> =
         _encodedFrameFlow.asSharedFlow()
 
-    // 在客户端本地缓存最新的 SPS/PPS 编解码配置帧(标志位=2的配置块)，用于解决解码器启动时初始化屏幕信息的问题
-    private val _clientCodecConfig = MutableStateFlow<Triple<ByteArray, Int, Long>?>(null)
-    val clientCodecConfig: StateFlow<Triple<ByteArray, Int, Long>?> =
-        _clientCodecConfig.asStateFlow()
 
     // 同步镜像的物理参考大屏宽度
     private val _mirroredWidth = MutableStateFlow(ViewModelConstants.DEFAULT_WIDTH)
@@ -460,9 +456,6 @@ class LanRemoteViewModel : ViewModel() {
                     val data = ByteArray(buffer.remaining())
                     buffer.get(data)
                     val frame = Triple(data, flags, pts)
-                    if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        _clientCodecConfig.value = frame
-                    }
                     _encodedFrameFlow.tryEmit(frame)
                     _hasFrameReceived.value = true
                 }
@@ -543,7 +536,6 @@ class LanRemoteViewModel : ViewModel() {
         socketClient = null
         _connectionState.value = ConnectionState.Disconnected
         _hasFrameReceived.value = false
-        _clientCodecConfig.value = null
     }
 
     /**
