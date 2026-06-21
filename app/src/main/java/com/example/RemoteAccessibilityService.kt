@@ -5,6 +5,9 @@ import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 远程触控辅助输入服务 (RemoteAccessibilityService)
@@ -14,7 +17,15 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "RemoteAccessibilityService"
+
+        @Volatile
         private var instance: RemoteAccessibilityService? = null
+
+        // 核心：使用 StateFlow 管理状态
+        // 核心：使用 StateFlow 管理状态
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
 
         /**
          * 在屏幕的全局指定坐标处模拟单点轻触(点击)操作
@@ -46,7 +57,13 @@ class RemoteAccessibilityService : AccessibilityService() {
          * @param durationMs 滑动手势的持续时间，单位毫秒，默认 300 毫秒
          * @return 如果手势滑动请求成功发送则返回 true，否则返回 false
          */
-        fun performSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 300): Boolean {
+        fun performSwipe(
+            startX: Float,
+            startY: Float,
+            endX: Float,
+            endY: Float,
+            durationMs: Long = 300
+        ): Boolean {
             val inst = instance
             if (inst == null) {
                 Log.w(TAG, "无法执行滑动：辅助服务未启用或未处于运行状态")
@@ -66,7 +83,7 @@ class RemoteAccessibilityService : AccessibilityService() {
          * @return 服务如果已被系统激活并绑定则返回 true，否则返回 false
          */
         fun isServiceRunning(): Boolean {
-            return instance != null
+            return isRunning.value
         }
     }
 
@@ -76,6 +93,7 @@ class RemoteAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        _isRunning.value = true // 更新状态
         Log.i(TAG, "远程触控辅助服务成功激活并绑定")
     }
 
@@ -86,6 +104,7 @@ class RemoteAccessibilityService : AccessibilityService() {
         super.onDestroy()
         if (instance == this) {
             instance = null
+            _isRunning.value = false // 更新状态
         }
         Log.i(TAG, "远程触控辅助服务已销毁")
     }
@@ -96,6 +115,7 @@ class RemoteAccessibilityService : AccessibilityService() {
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // 无需监听或截获任何系统的无障碍事件流，此服务纯粹用作全局手势注入器
+        Log.d("onAccessibilityEvent", event.toString())
     }
 
     /**

@@ -27,8 +27,10 @@ import kotlin.time.Duration.Companion.milliseconds
 enum class ConnectionState {
     /** 未连接状态 */
     Disconnected,
+
     /** 正在尝试连接中 */
     Connecting,
+
     /** 已成功建立连接 */
     Connected
 }
@@ -77,7 +79,8 @@ class SocketServer(
 
     inner class ClientHandler(val socket: Socket, val clientIp: String) {
         // Channel.CONFLATED：如果网络堵塞导致发送慢，新来的视频帧会直接覆盖旧帧，天然解决画面延迟累积问题
-        private val frameChannel = kotlinx.coroutines.channels.Channel<ByteArray>(capacity = kotlinx.coroutines.channels.Channel.CONFLATED)
+        private val frameChannel =
+            kotlinx.coroutines.channels.Channel<ByteArray>(capacity = kotlinx.coroutines.channels.Channel.CONFLATED)
 
         fun start() {
             // 发送协程 (视频流 -> 客户端)
@@ -92,7 +95,10 @@ class SocketServer(
                 } catch (e: SocketException) {
                     Log.w(TAG, "客户端 [$clientIp] 连接中断: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "客户端 [$clientIp] 发送数据失败: ${e.javaClass.simpleName}: ${e.message}")
+                    Log.e(
+                        TAG,
+                        "客户端 [$clientIp] 发送数据失败: ${e.javaClass.simpleName}: ${e.message}"
+                    )
                 } finally {
                     disconnect()
                 }
@@ -113,12 +119,16 @@ class SocketServer(
                             }
                         } else {
                             Log.w(TAG, "客户端 [$clientIp] 发送异常大小的数据包: $length bytes")
+                            disconnect()
                         }
                     }
                 } catch (e: SocketException) {
                     Log.w(TAG, "客户端 [$clientIp] 连接中断: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "客户端 [$clientIp] 接收数据失败: ${e.javaClass.simpleName}: ${e.message}")
+                    Log.e(
+                        TAG,
+                        "客户端 [$clientIp] 接收数据失败: ${e.javaClass.simpleName}: ${e.message}"
+                    )
                 } finally {
                     disconnect()
                 }
@@ -130,7 +140,10 @@ class SocketServer(
         }
 
         fun disconnect() {
-            try { socket.close() } catch (e: Exception) {}
+            try {
+                socket.close()
+            } catch (e: Exception) {
+            }
             activeClients.remove(clientIp)
             frameChannel.close()
             scope.launch(Dispatchers.Main) { onClientDisconnected(clientIp) }
@@ -176,7 +189,9 @@ class SocketServer(
         if (!isRunning) return
         isRunning = false
         Log.d(TAG, "正在停止服务端，活跃客户端: ${activeClients.size}")
-        try { serverSocket?.close() } catch (e: Exception) {
+        try {
+            serverSocket?.close()
+        } catch (e: Exception) {
             Log.e(TAG, "关闭服务端套接字失败: ${e.message}")
         }
         serverSocket = null
@@ -211,7 +226,10 @@ class SocketClient(
         scope.launch {
             try {
                 val targetSocket = Socket()
-                targetSocket.connect(InetSocketAddress(serverIp, port), NetworkConstants.CONNECT_TIMEOUT_MS.toInt())
+                targetSocket.connect(
+                    InetSocketAddress(serverIp, port),
+                    NetworkConstants.CONNECT_TIMEOUT_MS.toInt()
+                )
                 socket = targetSocket
                 outputStream = java.io.DataOutputStream(targetSocket.getOutputStream())
 
@@ -251,6 +269,7 @@ class SocketClient(
     fun sendCommand(command: String): Boolean {
         val out = outputStream
         if (out != null && socket?.isConnected == true) {
+            var response = true
             scope.launch {
                 try {
                     val bytes = command.toByteArray(Charsets.UTF_8)
@@ -259,11 +278,13 @@ class SocketClient(
                     out.flush()
                 } catch (e: SocketException) {
                     Log.w(TAG, "发送指令失败: 连接已断开")
+                    response = false
                 } catch (e: Exception) {
                     Log.e(TAG, "发送指令失败: ${e.javaClass.simpleName}: ${e.message}")
+                    response = false
                 }
             }
-            return true
+            return response
         }
         return false
     }

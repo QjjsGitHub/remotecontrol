@@ -78,6 +78,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
@@ -180,43 +181,20 @@ fun SimplifiedDashboardScreen(
     val mirroredWidth by viewModel.mirroredWidth.collectAsState()
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
-    var isAccessibilityEnabled by remember { mutableStateOf(false) }
+    // 订阅全局后台服务的实时运行状态，实现事件驱动的 UI 自动刷新
+    val isFloatingWindowRunning by FloatingWindowService.isRunning.collectAsStateWithLifecycle()
+    val isAccessibilityRunning by RemoteAccessibilityService.isRunning.collectAsStateWithLifecycle()
+
     var activeLogTab by remember { mutableIntStateOf(0) } // 0 = 服务端日志, 1 = 客户端日志
 
-    var isBgOverlayActive by remember { mutableStateOf(false) }
-
-    // 在 MainActivity 或 Composable UI 中
-    val scope = rememberCoroutineScope()
-
-    // 使用 DisposableEffect 来管理 Job 的生命周期
-    DisposableEffect(Unit) {
-        // 1. 启动协程并保存 Job 引用
-        val pollingJob = scope.launch {
-            try {
-                while (isActive) { // 检查协程是否仍然活跃
-                    isAccessibilityEnabled = RemoteAccessibilityService.isServiceRunning()
-                    isBgOverlayActive = FloatingWindowService.isRunning
-                    delay(1500.milliseconds)
-                }
-            } catch (e: CancellationException) {
-                // 协程被正常取消，可以在这里做清理工作
-            }
-        }
-
-        // 2. 在组件销毁（onDispose）时显式管理
-        onDispose {
-            pollingJob.cancel() // 显式取消，防止资源浪费
-        }
-    }
 
     // 监听连接状态的变化：一旦连接打通，检查并在此被控设备大盘上自动发起并加载后台常驻桌面悬浮窗
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.Connected) {
             if (Settings.canDrawOverlays(context)) {
-                if (!FloatingWindowService.isRunning) {
+                if (!FloatingWindowService.isRunning.value) {
                     val serviceIntent = Intent(context, FloatingWindowService::class.java)
                     context.startService(serviceIntent)
-                    isBgOverlayActive = true
                 }
             } else {
                 Toast.makeText(
@@ -232,10 +210,9 @@ fun SimplifiedDashboardScreen(
             }
         } else {
             // 通道意外中断，或人为主动切断连接后，彻底释放并注销大屏悬浮窗
-            if (FloatingWindowService.isRunning) {
+            if (FloatingWindowService.isRunning.value) {
                 val serviceIntent = Intent(context, FloatingWindowService::class.java)
                 context.stopService(serviceIntent)
-                isBgOverlayActive = false
             }
         }
     }
@@ -506,7 +483,9 @@ fun SimplifiedDashboardScreen(
                                     modifier = Modifier
                                         .size(8.dp)
                                         .background(
-                                            if (isAccessibilityEnabled) Color(0xFF4CAF50) else Color.Red,
+                                            if (isAccessibilityRunning) Color(
+                                                0xFF4CAF50
+                                            ) else Color.Red,
                                             CircleShape
                                         )
                                 )
@@ -518,7 +497,7 @@ fun SimplifiedDashboardScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = if (isAccessibilityEnabled) "无障碍勾住激活，接收动作时可模拟点击" else "未授权，无法代理模拟动作映射",
+                                        text = if (isAccessibilityRunning) "无障碍勾住激活，接收动作时可模拟点击" else "未授权，无法代理模拟动作映射",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -753,11 +732,10 @@ fun SimplifiedDashboardScreen(
 
                             Button(
                                 onClick = {
-                                    if (isBgOverlayActive) {
+                                    if (isFloatingWindowRunning) {
                                         val serviceIntent =
                                             Intent(context, FloatingWindowService::class.java)
                                         context.stopService(serviceIntent)
-                                        isBgOverlayActive = false
                                     } else {
                                         if (!Settings.canDrawOverlays(context)) {
                                             Toast.makeText(
@@ -774,12 +752,12 @@ fun SimplifiedDashboardScreen(
                                             val serviceIntent =
                                                 Intent(context, FloatingWindowService::class.java)
                                             context.startService(serviceIntent)
-                                            isBgOverlayActive = true
+                                            //todoFloatingWindowService.isRunning = true
                                         }
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isBgOverlayActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    containerColor = if (isFloatingWindowRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -791,12 +769,12 @@ fun SimplifiedDashboardScreen(
                                     horizontalArrangement = Arrangement.Center
                                 ) {
                                     Icon(
-                                        imageVector = if (isBgOverlayActive) Icons.Default.Close else Icons.Default.Share,
+                                        imageVector = if (isFloatingWindowRunning) Icons.Default.Close else Icons.Default.Share,
                                         contentDescription = "Background Floating Window Toggle",
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (isBgOverlayActive) "关闭后台悬浮窗" else "开启后台显示自适应悬浮窗")
+                                    Text(if (isFloatingWindowRunning) "关闭后台悬浮窗" else "开启后台显示自适应悬浮窗")
                                 }
                             }
                         }

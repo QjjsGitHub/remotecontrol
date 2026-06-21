@@ -73,6 +73,9 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.network.ConnectionState
 import com.example.ui.LanRemoteViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
@@ -89,9 +92,12 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
         const val TAG = "FloatingWindowService"
 
         /**
-         * 标记后台悬浮窗服务当前是否正在运行
+         * 其他后台线程（如协程、网络监听器）能立即看到最新的运行状态。
          */
-        var isRunning = false
+        // 核心：使用 StateFlow 管理状态
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
     }
 
     // 后台生命周期控制器，用于供给 ComposeView 所需的生命周期环境
@@ -126,7 +132,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
      */
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
+        _isRunning.value = true
         Log.i(TAG, "FloatingWindowService onCreate")
 
         // 激活生命周期状态
@@ -504,7 +510,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
      * 服务被销毁生命周期
      */
     override fun onDestroy() {
-        isRunning = false
+        _isRunning.value = false
         Log.i(TAG, "FloatingWindowService onDestroy")
         floatingView?.let { view ->
             try {
@@ -538,6 +544,8 @@ fun VideoSurfaceViewer(
 
     LaunchedEffect(viewModel) {
         viewModel.encodedFrameFlow.collect { frameInfo ->
+
+            //todo
             var codec = decoderRef.value
             while (codec == null) {
                 delay(50.milliseconds)
