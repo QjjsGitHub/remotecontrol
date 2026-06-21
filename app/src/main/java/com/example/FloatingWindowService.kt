@@ -408,57 +408,70 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                                                     localViewW = size.width
                                                     localViewH = size.height
                                                 }
-                                                // 监听点击手势 (仅在解锁/未锁定状态下响应反向控制)
+                                                // 监听手势 (全手势支持 + 60FPS 滑动节流)
                                                 .pointerInput(
                                                     localViewW,
                                                     localViewH,
                                                     isTouchLocked
                                                 ) {
-                                                    if (!isTouchLocked) {
-                                                        detectTapGestures(
-                                                            onTap = { offset ->
-                                                                if (localViewW > 0 && localViewH > 0) {
-                                                                    val rx = offset.x / localViewW
-                                                                    val ry = offset.y / localViewH
-                                                                    viewModel.sendClientAction("TAP:$rx,$ry")
+                                                    if (isTouchLocked || localViewW <= 0 || localViewH <= 0) return@pointerInput
+
+                                                    val viewW = localViewW.toFloat()
+                                                    val viewH = localViewH.toFloat()
+
+                                                    // 用于 60FPS 节流的变量 (1000ms / 60 ≈ 16ms)
+                                                    var lastMoveTime = 0L
+                                                    val frameInterval = 16L
+
+                                                    kotlinx.coroutines.coroutineScope {
+                                                        // 1. 处理 Tap, DoubleTap, LongPress, Press
+                                                        launch {
+                                                            detectTapGestures(
+                                                                onTap = { offset ->
+                                                                    Log.d(TAG, "Gesture: Tap at $offset")
+                                                                    viewModel.sendClientAction("TAP:${offset.x / viewW},${offset.y / viewH}")
+                                                                },
+                                                                onDoubleTap = { offset ->
+                                                                    Log.d(TAG, "Gesture: DoubleTap at $offset")
+                                                                    viewModel.sendClientAction("DOUBLE_TAP:${offset.x / viewW},${offset.y / viewH}")
+                                                                },
+                                                                onLongPress = { offset ->
+                                                                    Log.d(TAG, "Gesture: LongPress at $offset")
+                                                                    viewModel.sendClientAction("LONG_PRESS:${offset.x / viewW},${offset.y / viewH}")
                                                                 }
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                                // 监听滑动划扫手势 (仅在解锁/未锁定状态下响应反向控制)
-                                                .pointerInput(
-                                                    localViewW,
-                                                    localViewH,
-                                                    isTouchLocked
-                                                ) {
-                                                    if (!isTouchLocked) {
-                                                        detectDragGestures(
-                                                            onDragStart = { offset ->
-                                                                if (localViewW > 0 && localViewH > 0) {
-                                                                    val rx = offset.x / localViewW
-                                                                    val ry = offset.y / localViewH
-                                                                    viewModel.sendClientAction("DOWN:$rx,$ry")
+                                                            )
+                                                        }
+
+                                                        // 2. 处理 Drag (滑动) 并进行 60FPS 节流
+                                                        launch {
+                                                            detectDragGestures(
+                                                                onDragStart = { offset ->
+                                                                    Log.d(TAG, "Gesture: DragStart at $offset")
+                                                                    viewModel.sendClientAction("DOWN:${offset.x / viewW},${offset.y / viewH}")
+                                                                },
+                                                                onDragEnd = {
+                                                                    Log.d(TAG, "Gesture: DragEnd")
+                                                                    viewModel.sendClientAction("UP:0,0")
+                                                                },
+                                                                onDragCancel = {
+                                                                    Log.d(TAG, "Gesture: DragCancel")
+                                                                    viewModel.sendClientAction("UP:0,0")
+                                                                },
+                                                                onDrag = { change, _ ->
+                                                                    change.consume()
+                                                                    val currentTime = System.currentTimeMillis()
+                                                                    // 60FPS 节流逻辑：如果距离上次发送不足 16ms，则跳过本次发送
+                                                                    if (currentTime - lastMoveTime >= frameInterval) {
+                                                                        val rx = change.position.x / viewW
+                                                                        val ry = change.position.y / viewH
+                                                                        Log.v(TAG, "Gesture: Move to ($rx, $ry)")
+                                                                        viewModel.sendClientAction("MOVE:$rx,$ry")
+                                                                        lastMoveTime = currentTime
+                                                                    }
                                                                 }
-                                                            },
-                                                            onDragEnd = {
-                                                                viewModel.sendClientAction("UP:0,0")
-                                                            },
-                                                            onDragCancel = {
-                                                                viewModel.sendClientAction("UP:0,0")
-                                                            },
-                                                            onDrag = { change, _ ->
-                                                                change.consume()
-                                                                val currentX = change.position.x
-                                                                val currentY = change.position.y
-                                                                if (localViewW > 0 && localViewH > 0) {
-                                                                    val rex = currentX / localViewW
-                                                                    val rey = currentY / localViewH
-                                                                    viewModel.sendClientAction("MOVE:$rex,$rey")
-                                                                }
-                                                            }
-                                                        )
-                                                    }
+                                                            )
+                                                        }
+                                                 }
                                                 }
                                         )
 

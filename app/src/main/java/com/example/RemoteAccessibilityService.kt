@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.annotation.SuppressLint
 import android.graphics.Path
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.example.ui.LanRemoteViewModel
@@ -35,23 +36,86 @@ class RemoteAccessibilityService : AccessibilityService() {
         private var lastY = 0f
         private var isDragging = false
 
-        fun handleTouchDown(x: Float, y: Float) {
+        /*fun handleTouchDown(x: Float, y: Float) {
             lastX = x
             lastY = y
             isDragging = true
             // 发送一个极短的滑动或者点击来启动触摸
-            performTap(x, y)
+            //performTap(x, y)
         }
 
         fun handleTouchMove(x: Float, y: Float) {
             if (!isDragging) return
             // 使用极短时间 (10ms) 的滑动来模拟实时拖动
-            performSwipe(lastX, lastY, x, y, 10)
+            performSwipe(lastX, lastY, x, y, 200)
             lastX = x
             lastY = y
         }
 
         fun handleTouchUp() {
+            isDragging = false
+        }*/
+
+
+        // RemoteAccessibilityService.kt
+
+        private var currentStroke: GestureDescription.StrokeDescription? = null
+
+        // 当收到 DOWN 指令时
+        fun handleTouchDown(x: Float, y: Float) {
+            val inst = instance ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val path = Path().apply { moveTo(x, y) }
+                // willContinue = true: 保持按下状态
+                val stroke = GestureDescription.StrokeDescription(path, 0, 10, true)
+                currentStroke = stroke
+                inst.dispatchGesture(
+                    GestureDescription.Builder().addStroke(stroke).build(),
+                    null,
+                    null
+                )
+            }
+            lastX = x
+            lastY = y
+            isDragging = true
+        }
+
+        // 当收到 MOVE 指令时 (60FPS)
+        fun handleTouchMove(x: Float, y: Float) {
+            val inst = instance ?: return
+            val prev = currentStroke
+            if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val path = Path().apply {
+                    moveTo(lastX, lastY)
+                    lineTo(x, y)
+                }
+                // 【性能优化】将持续时间缩短至 50ms，显著提升实时跟手度，减少手势堆积
+                val next = prev.continueStroke(path, 0, 10, true)
+                currentStroke = next
+                inst.dispatchGesture(GestureDescription.Builder().addStroke(next).build(), null, null)
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                // 低版本 fallback
+                performSwipe(lastX, lastY, x, y, 10)
+            }
+            lastX = x
+            lastY = y
+        }
+
+        // 当收到 UP 指令时
+        fun handleTouchUp() {
+            val inst = instance ?: return
+            val prev = currentStroke
+            if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val path = Path().apply { moveTo(lastX, lastY) }
+                // 最后一小段，willContinue = false: 触发真正的手指抬起
+                val last = prev.continueStroke(path, 0, 10, false)
+                inst.dispatchGesture(
+                    GestureDescription.Builder().addStroke(last).build(),
+                    null,
+                    null
+                )
+            }
+            currentStroke = null
             isDragging = false
         }
 
@@ -71,7 +135,7 @@ class RemoteAccessibilityService : AccessibilityService() {
             val path = Path()
             path.moveTo(x, y)
             // 模拟耗时 50 毫秒的单点轻刷，达成点击效果
-            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+            val stroke = GestureDescription.StrokeDescription(path, 0, 30)
             val builder = GestureDescription.Builder()
             builder.addStroke(stroke)
             return inst.dispatchGesture(builder.build(), null, null)
@@ -102,6 +166,38 @@ class RemoteAccessibilityService : AccessibilityService() {
             path.moveTo(startX, startY)
             path.lineTo(endX, endY)
             val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+            val builder = GestureDescription.Builder()
+            builder.addStroke(stroke)
+            return inst.dispatchGesture(builder.build(), null, null)
+        }
+
+        /**
+         * 模拟双击 (优化版：单次分发两个连续 Stroke)
+         */
+        fun performDoubleTap(x: Float, y: Float): Boolean {
+            val inst = instance ?: return false
+            val path = Path().apply { moveTo(x, y) }
+            
+            // 第一下：从 0ms 开始，持续 40ms
+            val stroke1 = GestureDescription.StrokeDescription(path, 0, 40)
+            // 第二下：从 100ms 开始（留出 60ms 间隔），持续 40ms
+            val stroke2 = GestureDescription.StrokeDescription(path, 100, 40)
+            
+            val builder = GestureDescription.Builder()
+            builder.addStroke(stroke1)
+            builder.addStroke(stroke2)
+            
+            return inst.dispatchGesture(builder.build(), null, null)
+        }
+
+        /**
+         * 模拟长按
+         */
+        fun performLongPress(x: Float, y: Float): Boolean {
+            val inst = instance ?: return false
+            val path = Path()
+            path.moveTo(x, y)
+            val stroke = GestureDescription.StrokeDescription(path, 0, 800)
             val builder = GestureDescription.Builder()
             builder.addStroke(stroke)
             return inst.dispatchGesture(builder.build(), null, null)
@@ -164,6 +260,7 @@ class RemoteAccessibilityService : AccessibilityService() {
                     LogType.INFO
                 )
             }
+
             else -> {}
         }
     }

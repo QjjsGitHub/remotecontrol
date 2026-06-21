@@ -391,6 +391,30 @@ class LanRemoteViewModel : ViewModel() {
                     }
                 }
 
+                command.startsWith("DOUBLE_TAP:") -> {
+                    val coords = command.substringAfter("DOUBLE_TAP:").split(",")
+                    if (coords.size == 2) {
+                        val rx = coords[0].toFloatOrNull() ?: return
+                        val ry = coords[1].toFloatOrNull() ?: return
+                        val x = rx * _serverWidth.value
+                        val y = ry * _serverHeight.value
+                        RemoteAccessibilityService.performDoubleTap(x, y)
+                        addServerLog("[$clientIp] 模拟双击", LogType.SUCCESS)
+                    }
+                }
+
+                command.startsWith("LONG_PRESS:") -> {
+                    val coords = command.substringAfter("LONG_PRESS:").split(",")
+                    if (coords.size == 2) {
+                        val rx = coords[0].toFloatOrNull() ?: return
+                        val ry = coords[1].toFloatOrNull() ?: return
+                        val x = rx * _serverWidth.value
+                        val y = ry * _serverHeight.value
+                        RemoteAccessibilityService.performLongPress(x, y)
+                        addServerLog("[$clientIp] 模拟长按", LogType.SUCCESS)
+                    }
+                }
+
                 command.startsWith("DOWN:") -> {
                     val coords = command.substringAfter("DOWN:").split(",")
                     if (coords.size == 2) {
@@ -415,34 +439,6 @@ class LanRemoteViewModel : ViewModel() {
 
                 command.startsWith("UP:") -> {
                     RemoteAccessibilityService.handleTouchUp()
-                }
-
-                command.startsWith("SWIPE:") -> {
-                    val paths = command.substringAfter("SWIPE:").split(";")
-                    if (paths.size == 2) {
-                        val start = paths[0].split(",")
-                        val end = paths[1].split(",")
-                        if (start.size == 2 && end.size == 2) {
-                            val rsx = start[0].toFloatOrNull() ?: return
-                            val rsy = start[1].toFloatOrNull() ?: return
-                            val rex = end[0].toFloatOrNull() ?: return
-                            val rey = end[1].toFloatOrNull() ?: return
-
-                            val sx = rsx * _serverWidth.value
-                            val sy = rsy * _serverHeight.value
-                            val ex = rex * _serverWidth.value
-                            val ey = rey * _serverHeight.value
-
-                            if (RemoteAccessibilityService.performSwipe(sx, sy, ex, ey)) {
-                                addServerLog("[$clientIp] 模拟滑动", LogType.SUCCESS)
-                            } else {
-                                addServerLog(
-                                    "[$clientIp] 滑动失败: 无障碍服务未运行",
-                                    LogType.WARNING
-                                )
-                            }
-                        }
-                    }
                 }
 
                 command == "BACK" -> {
