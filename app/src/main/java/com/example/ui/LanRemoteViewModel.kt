@@ -299,10 +299,7 @@ class LanRemoteViewModel : ViewModel() {
         // 自动判定旋转状态：0 竖屏，1 横屏
         val rotation = if (width > height) 1 else 0
 
-        var captureWidth = ((width * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
-        var captureHeight = ((height * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
-        if (captureWidth <= 0) captureWidth = ViewModelConstants.DEFAULT_WIDTH
-        if (captureHeight <= 0) captureHeight = ViewModelConstants.DEFAULT_HEIGHT
+        val (captureWidth, captureHeight) = calculateCaptureSize(width, height)
 
         addServerLog(
             "本机录屏分辨率初始化完成: ${width}x${height} (视频流分辨率: ${captureWidth}x${captureHeight}), 旋转状态: $rotation",
@@ -319,7 +316,37 @@ class LanRemoteViewModel : ViewModel() {
     }
 
 
-    // 修改方法签名，将 base64Data: String 改为 data: ByteArray
+    /**
+     * 高效处理视频帧捕获（直接处理 ByteBuffer 减少内存分配）
+     */
+    fun onEncodedFrameCaptured(codecBuffer: java.nio.ByteBuffer, bufferInfo: android.media.MediaCodec.BufferInfo) {
+        val size = bufferInfo.size
+        val flags = bufferInfo.flags
+        val pts = bufferInfo.presentationTimeUs
+
+        // 核心优化：只分配一次最终的网络包数组 (1 byte 类型 + 4 bytes Flags + 8 bytes PTS + 实际数据)
+        val packet = ByteArray(1 + 4 + 8 + size)
+        val wrap = java.nio.ByteBuffer.wrap(packet)
+        wrap.put(NetworkConstants.TYPE_VIDEO.toByte())
+        wrap.putInt(flags)
+        wrap.putLong(pts)
+
+        // 直接从硬件 Buffer 拷贝到最终的网络数组，跳过中间层
+        val oldPos = codecBuffer.position()
+        val oldLimit = codecBuffer.limit()
+        try {
+            codecBuffer.position(bufferInfo.offset)
+            codecBuffer.limit(bufferInfo.offset + size)
+            codecBuffer.get(packet, 13, size)
+        } finally {
+            codecBuffer.position(oldPos)
+            codecBuffer.limit(oldLimit)
+        }
+
+        socketServer?.broadcastData(packet)
+    }
+
+    // 保留原方法签名供补发配置帧等 ByteArray 场景使用
     fun onEncodedFrameCaptured(data: ByteArray, flags: Int, presentationTimeUs: Long) {
         // 构造二进制包：1 byte(类型:2代表视频) + 4 bytes(Flags) + 8 bytes(PTS) + N bytes(视频数据)
         val buffer = java.nio.ByteBuffer.allocate(1 + 4 + 8 + data.size)
@@ -535,6 +562,17 @@ class LanRemoteViewModel : ViewModel() {
         socketClient = null
         _connectionState.value = ConnectionState.Disconnected
         _hasFrameReceived.value = false
+    }
+
+    /**
+     * 计算并对齐录屏采集的分辨率
+     */
+    private fun calculateCaptureSize(width: Int, height: Int): Pair<Int, Int> {
+        var captureWidth = ((width * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
+        var captureHeight = ((height * ViewModelConstants.CAPTURE_SCALE).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = ViewModelConstants.DEFAULT_WIDTH
+        if (captureHeight <= 0) captureHeight = ViewModelConstants.DEFAULT_HEIGHT
+        return Pair(captureWidth, captureHeight)
     }
 
     /**

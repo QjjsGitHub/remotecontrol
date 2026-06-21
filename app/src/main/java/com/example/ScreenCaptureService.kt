@@ -156,10 +156,7 @@ class ScreenCaptureService : Service() {
         codecSurface = null
 
         // 3. 计算旋转后的新录屏分辨率 (对齐到 16 字节)
-        var captureWidth = ((width * 0.8).toInt() / 16) * 16
-        var captureHeight = ((height * 0.8).toInt() / 16) * 16
-        if (captureWidth <= 0) captureWidth = 1080
-        if (captureHeight <= 0) captureHeight = 2400
+        val (captureWidth, captureHeight) = calculateCaptureSize(width, height)
 
         // 4. 使用新分辨率重新创建并配置 MediaCodec
         try {
@@ -310,10 +307,7 @@ class ScreenCaptureService : Service() {
         LanRemoteViewModel.instance?.onScreenSizeDetermined(width, height)
 
         // 为了极大节约移动端局域网的网络传输带宽开销，将采集宽高整体降级为正常宽高的 0.35 倍，且对齐到 16 字节
-        var captureWidth = ((width * 0.8).toInt() / 16) * 16
-        var captureHeight = ((height * 0.8).toInt() / 16) * 16
-        if (captureWidth <= 0) captureWidth = 1080
-        if (captureHeight <= 0) captureHeight = 2400
+        val (captureWidth, captureHeight) = calculateCaptureSize(width, height)
 
         try {
             val format = MediaFormat.createVideoFormat(
@@ -388,42 +382,54 @@ class ScreenCaptureService : Service() {
                     if (outputBufferIndex >= 0) {
                         val outputBuffer = codec.getOutputBuffer(outputBufferIndex)
                         if (outputBuffer != null && bufferInfo.size > 0) {
-                            outputBuffer.position(bufferInfo.offset)
-                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                            val outData = ByteArray(bufferInfo.size)
-                            outputBuffer.get(outData)
-
                             val flags = bufferInfo.flags
                             val pts = bufferInfo.presentationTimeUs
 
                             // --- 周期性补发逻辑核心开始 ---
                             if (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                                // 1. 如果是配置帧 (SPS/PPS)，更新本地缓存
-                                cachedConfigFrame = outData
+                                // 1. 配置帧（SPS/PPS）频率极低（每秒或每分钟才一次），单独拷贝一份用于缓存
+                                val configData = ByteArray(bufferInfo.size)
+                                outputBuffer.get(configData)
+                                cachedConfigFrame = configData
                                 Log.d(TAG, "已捕获并缓存最新编码器配置 (SPS/PPS)")
                             } else if (flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) {
                                 // 2. 如果是关键帧 (I-Frame)，检查是否有缓存的配置
                                 cachedConfigFrame?.let { config ->
-                                    Log.d(TAG, "正在关键帧前注入补发配置帧，确保客户端解码连续性")
                                     vm?.onEncodedFrameCaptured(
                                         config,
                                         MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
-                                        pts // 使用当前帧的 PTS
+                                        pts
                                     )
                                 }
                             }
                             // --- 周期性补发逻辑核心结束 ---
 
-                            // 发送原始数据帧
-                            vm?.onEncodedFrameCaptured(outData, flags, pts)
+                            // 核心优化：直接把硬件 ByteBuffer 丢给 VM 处理，由 VM 进行唯一的分配和拷贝
+                            vm?.onEncodedFrameCaptured(outputBuffer, bufferInfo)
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
                 } catch (e: Exception) {
-                    Log.d(TAG, "Encoding loop interval packet: ${e.message}")
+                    // 如果是严重错误，可以重启编码器
+                    if (isEncoding) {
+                        Log.d(TAG, "线程中断: ${e.message}")
+                    } else {
+                        Log.e(TAG, "编码异常: ${e.message}")
+                    }
                 }
             }
         }.apply { start() }
+    }
+
+    /**
+     * 计算并对齐录屏采集的分辨率
+     */
+    private fun calculateCaptureSize(width: Int, height: Int): Pair<Int, Int> {
+        var captureWidth = ((width * 0.8).toInt() / 16) * 16
+        var captureHeight = ((height * 0.8).toInt() / 16) * 16
+        if (captureWidth <= 0) captureWidth = 1080
+        if (captureHeight <= 0) captureHeight = 2400
+        return Pair(captureWidth, captureHeight)
     }
 
     /**
