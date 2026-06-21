@@ -381,16 +381,19 @@ class UdpBroadcaster(
  * 以便实时刷新”发现同Wi-Fi网络服务端”列表。
  *
  * @property port 服务端 UDP 广播信道端口
- * @property onServerDiscovered 当探测并确立监听到某个具体的被群控端 IP 时的发现通知回调
+ * @property onServersUpdated 当局域网发现的服务端列表发生变化（增加或过期移除）时的回调
  */
 class UdpListener(
     private val port: Int = NetworkConstants.UDP_PORT,
-    private val onServerDiscovered: (String) -> Unit
+    private val onServersUpdated: (Set<String>) -> Unit
 ) {
     private val TAG = "UdpListener"
     private var socket: DatagramSocket? = null
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // 追踪每个发现的 IP 及其最后活跃时间戳
+    private val lastSeenMap = ConcurrentHashMap<String, Long>()
 
     /**
      * 启动 UDP 物理监听探针
@@ -399,39 +402,70 @@ class UdpListener(
         if (isRunning) return
         isRunning = true
         Log.d(TAG, "启动 UDP 监听器: 端口 $port")
+
+        // 接收广播的协程
         scope.launch {
             try {
                 socket = DatagramSocket(port).apply {
                     reuseAddress = true
-                    soTimeout = 5000  // 5秒超时，避免永久阻塞
+                    soTimeout = 2000  // 5秒超时，避免永久阻塞
                 }
                 val buffer = ByteArray(NetworkConstants.UDP_BUFFER_SIZE)
                 Log.d(TAG, "UDP 监听器开始扫描局域网设备")
                 while (isRunning) {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    withContext(Dispatchers.IO) {
-                        socket?.receive(packet)
-                    }
-                    val message = String(packet.data, 0, packet.length).trim()
-                    if (message.startsWith(NetworkConstants.UDP_BROADCAST_PREFIX)) {
-                        val ip = message.substringAfter(NetworkConstants.UDP_BROADCAST_PREFIX)
-                        Log.d(TAG, "发现服务端: $ip (来自 ${packet.address})")
-                        withContext(Dispatchers.Main) {
-                            onServerDiscovered(ip)
+                    try {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        withContext(Dispatchers.IO) {
+                            socket?.receive(packet)
                         }
+                        val message = String(packet.data, 0, packet.length).trim()
+                        if (message.startsWith(NetworkConstants.UDP_BROADCAST_PREFIX)) {
+                            val ip = message.substringAfter(NetworkConstants.UDP_BROADCAST_PREFIX)
+                            val now = System.currentTimeMillis()
+                            val isNew = !lastSeenMap.containsKey(ip)
+                            lastSeenMap[ip] = now
+
+                            if (isNew) {
+                                Log.d(TAG, "发现新服务端: $ip")
+                                withContext(Dispatchers.Main) {
+                                    onServersUpdated(lastSeenMap.keys.toSet())
+                                }
+                            }
+                        }
+                    } catch (e: SocketTimeoutException) {
+                        // 超时属于正常循环
                     }
-                }
-            } catch (e: SocketTimeoutException) {
-                // 超时是正常的，继续循环
-                if (isRunning) {
-                    Log.d(TAG, "UDP 监听超时，继续扫描")
-                }
-            } catch (e: SocketException) {
-                if (isRunning) {
-                    Log.e(TAG, "UDP 监听异常: ${e.javaClass.simpleName}: ${e.message}")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "UDP 监听启动失败: ${e.javaClass.simpleName}: ${e.message}")
+                if (isRunning) {
+                    Log.e(TAG, "UDP 监听运行异常: ${e.message}")
+                }
+            }
+        }
+
+        // 定时清理过期设备的协程 (TTL 机制)
+        scope.launch {
+            while (isRunning) {
+                delay(NetworkConstants.BROADCAST_INTERVAL_MS * 2) // 每 4 秒检查一次
+                val now = System.currentTimeMillis()
+                var hasRemoved = false
+                val iterator = lastSeenMap.entries.iterator()
+
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    // 如果超过 3 次广播周期 (约 6-7 秒) 没收到包，认为已下线
+                    if (now - entry.value > NetworkConstants.BROADCAST_INTERVAL_MS * 3 + 1000) {
+                        Log.i(TAG, "服务端 IP 已过期移除: ${entry.key}")
+                        iterator.remove()
+                        hasRemoved = true
+                    }
+                }
+
+                if (hasRemoved) {
+                    withContext(Dispatchers.Main) {
+                        onServersUpdated(lastSeenMap.keys.toSet())
+                    }
+                }
             }
         }
     }
@@ -449,6 +483,7 @@ class UdpListener(
             Log.e(TAG, "关闭 UDP socket 失败: ${e.message}")
         }
         socket = null
+        lastSeenMap.clear()
         scope.coroutineContext.cancelChildren()
     }
 }

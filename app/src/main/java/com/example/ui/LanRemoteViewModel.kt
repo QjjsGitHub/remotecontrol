@@ -160,7 +160,6 @@ class LanRemoteViewModel : ViewModel() {
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
     private var socketClient: SocketClient? = null
-    private var cachedCodecConfig: ByteArray? = null
 
     init {
         instance = this
@@ -235,11 +234,6 @@ class LanRemoteViewModel : ViewModel() {
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
 
                     updateScreenSize()
-
-                    // 立即将本地缓存的最近一次 SPS/PPS 首配置帧灌送给刚连接进来的客户端使其可以立即初始化解码器
-                    cachedCodecConfig?.let { configMsg ->
-                        socketServer?.broadcastData(configMsg)
-                    }
                 },
                 onClientDisconnected = { clientIp ->
                     _connectedClients.value = _connectedClients.value - clientIp
@@ -334,9 +328,6 @@ class LanRemoteViewModel : ViewModel() {
         buffer.put(data)
 
         val packet = buffer.array()
-        if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-            cachedCodecConfig = packet // 缓存 SPS/PPS
-        }
         socketServer?.broadcastData(packet)
     }
 
@@ -454,11 +445,20 @@ class LanRemoteViewModel : ViewModel() {
     fun startDiscovery() {
         _discoveredServers.value = emptySet()
         udpListener?.stop()
-        udpListener = UdpListener(port = NetworkConstants.UDP_PORT) { ip ->
-            val set = _discoveredServers.value.toMutableSet()
-            if (set.add(ip)) {
-                _discoveredServers.value = set
+        udpListener = UdpListener(port = NetworkConstants.UDP_PORT) { serverSet ->
+            val oldSet = _discoveredServers.value
+            _discoveredServers.value = serverSet
+            
+            // 找出新增的 IP 记录日志
+            val newIps = serverSet - oldSet
+            newIps.forEach { ip ->
                 addControllerLog("发现局域网可用共控端设备: $ip", LogType.SUCCESS)
+            }
+            
+            // 找出消失的 IP 记录日志
+            val lostIps = oldSet - serverSet
+            lostIps.forEach { ip ->
+                addControllerLog("局域网设备已离线: $ip", LogType.WARNING)
             }
         }
         udpListener?.start()

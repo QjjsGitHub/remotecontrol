@@ -65,6 +65,12 @@ class ScreenCaptureService : Service() {
     private var codecThread: Thread? = null
     private var isEncoding = false
 
+    /**
+     * 【关键优化】本地缓存 SPS/PPS 配置帧。
+     * 每次编码器产生关键帧时，我们都先补发一次此配置，确保客户端随时接入都能立即解码。
+     */
+    private var cachedConfigFrame: ByteArray? = null
+
 
     private val displayManager by lazy {
         getSystemService(DISPLAY_SERVICE) as DisplayManager
@@ -397,16 +403,29 @@ class ScreenCaptureService : Service() {
                             val outData = ByteArray(bufferInfo.size)
                             outputBuffer.get(outData)
 
-                            //val base64Data = Base64.encodeToString(outData, Base64.NO_WRAP)
-                            //val flags = bufferInfo.flags
-                            //vm?.onEncodedFrameCaptured(base64Data, flags, bufferInfo.presentationTimeUs)
+                            val flags = bufferInfo.flags
+                            val pts = bufferInfo.presentationTimeUs
 
-                            // 替换为：纯二进制传输，移除 Base64 耗时操作
-                            vm?.onEncodedFrameCaptured(
-                                outData,
-                                bufferInfo.flags,
-                                bufferInfo.presentationTimeUs
-                            )
+                            // --- 周期性补发逻辑核心开始 ---
+                            if (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                // 1. 如果是配置帧 (SPS/PPS)，更新本地缓存
+                                cachedConfigFrame = outData
+                                Log.d(TAG, "已捕获并缓存最新编码器配置 (SPS/PPS)")
+                            } else if (flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) {
+                                // 2. 如果是关键帧 (I-Frame)，检查是否有缓存的配置
+                                cachedConfigFrame?.let { config ->
+                                    Log.d(TAG, "正在关键帧前注入补发配置帧，确保客户端解码连续性")
+                                    vm?.onEncodedFrameCaptured(
+                                        config,
+                                        MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
+                                        pts // 使用当前帧的 PTS
+                                    )
+                                }
+                            }
+                            // --- 周期性补发逻辑核心结束 ---
+
+                            // 发送原始数据帧
+                            vm?.onEncodedFrameCaptured(outData, flags, pts)
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
