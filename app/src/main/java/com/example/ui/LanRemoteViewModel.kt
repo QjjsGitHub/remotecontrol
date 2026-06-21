@@ -56,7 +56,8 @@ private object ViewModelConstants {
  * IPv4 地址验证
  */
 private object IpValidator {
-    private const val IPV4_PATTERN = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    private const val IPV4_PATTERN =
+        "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
 
     /**
      * 验证字符串是否为有效的 IPv4 地址
@@ -182,7 +183,8 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addServerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _serverLogs.value = listOf(entry) + _serverLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
+        _serverLogs.value =
+            listOf(entry) + _serverLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
     }
 
     /**
@@ -192,7 +194,8 @@ class LanRemoteViewModel : ViewModel() {
      */
     fun addControllerLog(message: String, type: LogType = LogType.INFO) {
         val entry = LogEntry(timestamp = getCurrentTimestamp(), message = message, type = type)
-        _controllerLogs.value = listOf(entry) + _controllerLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
+        _controllerLogs.value =
+            listOf(entry) + _controllerLogs.value.take(ViewModelConstants.MAX_LOG_ENTRIES)
     }
 
     /**
@@ -373,7 +376,10 @@ class LanRemoteViewModel : ViewModel() {
                     addServerLog("[$clientIp] TAP 命令格式错误: 坐标解析失败", LogType.WARNING)
                     Log.e(TAG, "TAP 坐标解析异常: ${e.message}")
                 } catch (e: Exception) {
-                    addServerLog("[$clientIp] TAP 命令处理异常: ${e.javaClass.simpleName}", LogType.WARNING)
+                    addServerLog(
+                        "[$clientIp] TAP 命令处理异常: ${e.javaClass.simpleName}",
+                        LogType.WARNING
+                    )
                     Log.e(TAG, "TAP 处理异常", e)
                 }
             }
@@ -402,19 +408,31 @@ class LanRemoteViewModel : ViewModel() {
                                     LogType.SUCCESS
                                 )
                             } else {
-                                addServerLog("[$clientIp] 模拟滑动失败: 辅助功能状态异常", LogType.WARNING)
+                                addServerLog(
+                                    "[$clientIp] 模拟滑动失败: 辅助功能状态异常",
+                                    LogType.WARNING
+                                )
                             }
                         } else {
-                            addServerLog("[$clientIp] SWIPE 命令格式错误: 路径点数量不足", LogType.WARNING)
+                            addServerLog(
+                                "[$clientIp] SWIPE 命令格式错误: 路径点数量不足",
+                                LogType.WARNING
+                            )
                         }
                     } else {
-                        addServerLog("[$clientIp] SWIPE 命令格式错误: 缺少路径分隔符", LogType.WARNING)
+                        addServerLog(
+                            "[$clientIp] SWIPE 命令格式错误: 缺少路径分隔符",
+                            LogType.WARNING
+                        )
                     }
                 } catch (e: NumberFormatException) {
                     addServerLog("[$clientIp] SWIPE 命令格式错误: 坐标解析失败", LogType.WARNING)
                     Log.e(TAG, "SWIPE 坐标解析异常: ${e.message}")
                 } catch (e: Exception) {
-                    addServerLog("[$clientIp] SWIPE 命令处理异常: ${e.javaClass.simpleName}", LogType.WARNING)
+                    addServerLog(
+                        "[$clientIp] SWIPE 命令处理异常: ${e.javaClass.simpleName}",
+                        LogType.WARNING
+                    )
                     Log.e(TAG, "SWIPE 处理异常", e)
                 }
             }
@@ -497,8 +515,10 @@ class LanRemoteViewModel : ViewModel() {
                 if (message.startsWith("SIZE:")) {
                     val sizes = message.substringAfter("SIZE:").split(",")
                     if (sizes.size >= 3) {
-                        _mirroredWidth.value = sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
-                        _mirroredHeight.value = sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
+                        _mirroredWidth.value =
+                            sizes[0].toIntOrNull() ?: ViewModelConstants.DEFAULT_WIDTH
+                        _mirroredHeight.value =
+                            sizes[1].toIntOrNull() ?: ViewModelConstants.DEFAULT_HEIGHT
                         val rotation = sizes[2].toIntOrNull() ?: 0
                         addControllerLog(
                             "同步远端屏幕状态: 镜像宽:${_mirroredWidth.value}  镜像高:${_mirroredHeight.value} " +
@@ -563,7 +583,9 @@ class LanRemoteViewModel : ViewModel() {
     fun sendClientAction(actionCommand: String) {
         val client = socketClient
         if (client != null && _connectionState.value == ConnectionState.Connected) {
-            client.sendCommand(actionCommand)
+
+            viewModelScope.launch(Dispatchers.IO) { client.sendCommand(actionCommand) }
+
         }
     }
 

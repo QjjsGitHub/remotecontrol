@@ -119,9 +119,11 @@ class RemoteAccessibilityService : AccessibilityService() {
         when (event?.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // 至少读取一些信息，证明服务在工作
+
+                // 只在窗口变化时记录，避免过于频繁
+                val packageName = event.packageName?.toString() ?: "unknown"
                 LanRemoteViewModel.instance?.addServerLog(
-                    event.contentDescription.toString(),
+                    "窗口切换: $packageName",
                     LogType.INFO
                 )
             }

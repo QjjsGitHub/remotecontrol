@@ -247,6 +247,7 @@ class SocketClient(
                         }
                     } else {
                         Log.w(TAG, "接收到异常大小的数据包: $length bytes")
+                        disconnectInternal()
                     }
                 }
             } catch (e: SocketTimeoutException) {
@@ -266,29 +267,25 @@ class SocketClient(
     }
 
     // 客户端发送控制指令依然可以是 String，但底层包装成二进制包发送
-    fun sendCommand(command: String): Boolean {
+    // 1. 改为 suspend 函数，移除 scope.launch
+    suspend fun sendCommand(command: String): Boolean = withContext(Dispatchers.IO) {
         val out = outputStream
-        var response = false
         if (out != null && socket?.isConnected == true) {
-            scope.launch {
-                try {
-                    val bytes = command.toByteArray(Charsets.UTF_8)
-                    out.writeInt(bytes.size)
-                    out.write(bytes)
-                    out.flush()
-                    response = true
-                } catch (_: SocketException) {
-                    Log.w(TAG, "发送指令失败: 连接已断开")
-                    response = false
-                } catch (e: Exception) {
-                    Log.e(TAG, "发送指令失败: ${e.javaClass.simpleName}: ${e.message}")
-                    response = false
-                }
+            try {
+                val bytes = command.toByteArray(Charsets.UTF_8)
+                out.writeInt(bytes.size)
+                out.write(bytes)
+                out.flush()
+                true // 实实在在的发送成功
+            } catch (e: Exception) {
+                Log.e(TAG, "发送失败: ${e.message}")
+                false
             }
-            return response
+        } else {
+            false
         }
-        return false
     }
+
 
     fun disconnect() {
         if (!isRunning) {
