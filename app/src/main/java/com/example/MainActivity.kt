@@ -752,7 +752,6 @@ fun SimplifiedDashboardScreen(
                                             val serviceIntent =
                                                 Intent(context, FloatingWindowService::class.java)
                                             context.startService(serviceIntent)
-                                            //todoFloatingWindowService.isRunning = true
                                         }
                                     }
                                 },
