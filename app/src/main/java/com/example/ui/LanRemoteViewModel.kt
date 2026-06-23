@@ -13,17 +13,6 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * ViewModel 相关常量
- */
-private object ViewModelConstants {
-    /** 默认视频流宽度 */
-    const val DEFAULT_WIDTH = 1080
-
-    /** 默认视频流高度 */
-    const val DEFAULT_HEIGHT = 2400
-}
-
 @HiltViewModel
 class LanRemoteViewModel @Inject constructor(
     private val repository: RemoteControlRepository
@@ -139,25 +128,12 @@ class LanRemoteViewModel @Inject constructor(
         }
     }
 
-    fun stopDiscovery() {
-        viewModelScope.launch {
-            repository.stopDiscovery()
-        }
-    }
-
     fun setManualIp(ip: String) {
         repository.setManualIp(ip)
     }
 
     fun selectServer(serverInfo: ServerInfo) {
         repository.selectServer(serverInfo)
-    }
-
-    /**
-     * 旧版兼容：接收字符串 IP
-     */
-    fun selectServer(ip: String) {
-        repository.setManualIp(ip)
     }
 
     fun connectToSelectedServer() {
@@ -169,12 +145,6 @@ class LanRemoteViewModel @Inject constructor(
 
         viewModelScope.launch {
             repository.connectToServer(ServerInfo(ip))
-        }
-    }
-
-    fun sendClientAction(actionCommand: String) {
-        viewModelScope.launch {
-            repository.sendCommand(actionCommand)
         }
     }
 
@@ -190,6 +160,5 @@ class LanRemoteViewModel @Inject constructor(
             repository.stopDiscovery()
             repository.disconnect()
         }
-        super.onCleared()
     }
 }

@@ -1,5 +1,8 @@
 package com.example
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -59,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -97,6 +101,8 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
 
     companion object {
         const val TAG = "FloatingWindowService"
+
+        private val CHANNEL_ID: String = "FloatingWindowService"
 
         /**
          * 其他后台线程（如协程、网络监听器）能立即看到最新的运行状态。
@@ -148,6 +154,20 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
+        createNotificationChannel()
+        // 启动前台通知（Android 14 强制要求）
+        val notification = createNotification() // 你需要实现一个简单的通知创建方法
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                9922,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            )
+        } else {
+            startForeground(9922, notification)
+        }
+
+
         // 绑定窗口管理员并创建浮空视窗
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         setupFloatingWindow()
@@ -161,6 +181,32 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 }
             }
         }
+    }
+
+    /**
+     * 建立并在系统服务下注册低功耗前台通知管道
+     */
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "屏幕共享后台服务",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "正在后台捕获并发送屏幕数据流"
+            }
+            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("远程悬浮窗已打开")
+            .setContentText("显示远程画面")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .build()
     }
 
     /**
@@ -220,7 +266,7 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
             val mirroredWidth by repository.mirroredWidth.collectAsState()
             val mirroredHeight by repository.mirroredHeight.collectAsState()
 
-            // 1. 获取窗口信息（包含精确的像素尺寸）
+            // 1. 获取窗口信息（包含精确地像素尺寸）
             val windowInfo = LocalWindowInfo.current
             // 2. 获取当前的密度（用于像素转 DP）
             val density = LocalDensity.current

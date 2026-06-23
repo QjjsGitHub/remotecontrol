@@ -686,7 +686,7 @@ fun SimplifiedDashboardScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        // 1. 获取窗口信息（包含精确的像素尺寸）
+                        // 1. 获取窗口信息（包含精确地像素尺寸）
                         val windowInfo = LocalWindowInfo.current
                         // 2. 获取当前的密度（用于像素转 DP）
                         val density = LocalDensity.current
@@ -872,7 +872,7 @@ fun SimplifiedDashboardScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    items(serverLogs) { log ->
+                                    items(serverLogs, key = { it.id }) { log ->
                                         Row {
                                             Text(
                                                 "[${log.timestamp}] ",
@@ -920,7 +920,7 @@ fun SimplifiedDashboardScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    items(controllerLogs) { log ->
+                                    items(controllerLogs, key = { it.id }) { log ->
                                         Row {
                                             Text(
                                                 "[${log.timestamp}] ",
