@@ -11,14 +11,16 @@ import com.example.data.model.LogType
 import com.example.data.model.RemoteCommand
 import com.example.data.repository.RemoteControlRepository
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
  * 远程触控辅助输入服务 (RemoteAccessibilityService)
- * 继承自系统的 AccessibilityService，用于在被控制端(服务端)模拟全局的触摸、滑动等手势操作。
+ * 遵循 MVVM 模式。不再通过静态单例暴露，而是订阅 Repository 的命令流。
  */
 @SuppressLint("AccessibilityPolicy")
 @AndroidEntryPoint
@@ -27,255 +29,115 @@ class RemoteAccessibilityService : AccessibilityService() {
     @Inject
     lateinit var repository: RemoteControlRepository
 
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
     companion object {
         private const val TAG = "RemoteAccessibilityService"
-
-        @Volatile
-        private var instance: RemoteAccessibilityService? = null
-
-        // 核心：使用 StateFlow 管理状态
-        // 核心：使用 StateFlow 管理状态
-        private val _isRunning = MutableStateFlow(false)
-        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
-
-        // 用于处理连续手势的状态变量
-        private var lastX = 0f
-        private var lastY = 0f
-        private var isDragging = false
-
-        private var currentStroke: GestureDescription.StrokeDescription? = null
-
-        // 当收到 DOWN 指令时
-        fun handleTouchDown(x: Float, y: Float) {
-            val inst = instance ?: return
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val path = Path().apply { moveTo(x, y) }
-                // willContinue = true: 保持按下状态
-                val stroke = GestureDescription.StrokeDescription(path, 0, 10, true)
-                currentStroke = stroke
-                inst.dispatchGesture(
-                    GestureDescription.Builder().addStroke(stroke).build(),
-                    null,
-                    null
-                )
-            }
-            lastX = x
-            lastY = y
-            isDragging = true
-        }
-
-        // 当收到 MOVE 指令时 (60FPS)
-        fun handleTouchMove(x: Float, y: Float) {
-            val inst = instance ?: return
-            val prev = currentStroke
-            if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val path = Path().apply {
-                    moveTo(lastX, lastY)
-                    lineTo(x, y)
-                }
-                // 【性能优化】将持续时间缩短至 50ms，显著提升实时跟手度，减少手势堆积
-                val next = prev.continueStroke(path, 0, 10, true)
-                currentStroke = next
-                inst.dispatchGesture(GestureDescription.Builder().addStroke(next).build(), null, null)
-            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                // 低版本 fallback
-                performSwipe(lastX, lastY, x, y, 10)
-            }
-            lastX = x
-            lastY = y
-        }
-
-        // 当收到 UP 指令时
-        fun handleTouchUp() {
-            val inst = instance ?: return
-            val prev = currentStroke
-            if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val path = Path().apply { moveTo(lastX, lastY) }
-                // 最后一小段，willContinue = false: 触发真正的手指抬起
-                val last = prev.continueStroke(path, 0, 10, false)
-                inst.dispatchGesture(
-                    GestureDescription.Builder().addStroke(last).build(),
-                    null,
-                    null
-                )
-            }
-            currentStroke = null
-            isDragging = false
-        }
-
-
-        /**
-         * 在屏幕的全局指定坐标处模拟单点轻触(点击)操作
-         * @param x 目标点击位置的X轴物理像素坐标
-         * @param y 目标点击位置的Y轴物理像素坐标
-         * @return 如果手势分发请求成功发送则返回 true，否则返回 false
-         */
-        fun performTap(x: Float, y: Float): Boolean {
-            val inst = instance
-            if (inst == null) {
-                Log.w(TAG, "无法执行点击：辅助服务未启用或未处于运行状态")
-                return false
-            }
-            val path = Path()
-            path.moveTo(x, y)
-            // 模拟耗时 50 毫秒的单点轻刷，达成点击效果
-            val stroke = GestureDescription.StrokeDescription(path, 0, 30)
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke)
-            return inst.dispatchGesture(builder.build(), null, null)
-        }
-
-        /**
-         * 在屏幕上模拟全局的滑动/拖动轨迹手势
-         * @param startX 起点位置的X轴物理像素坐标
-         * @param startY 起点位置的Y轴物理像素坐标
-         * @param endX 终点位置的X轴物理像素坐标
-         * @param endY 终点位置的Y轴物理像素坐标
-         * @param durationMs 滑动手势的持续时间，单位毫秒，默认 300 毫秒
-         * @return 如果手势滑动请求成功发送则返回 true，否则返回 false
-         */
-        fun performSwipe(
-            startX: Float,
-            startY: Float,
-            endX: Float,
-            endY: Float,
-            durationMs: Long = 300
-        ): Boolean {
-            val inst = instance
-            if (inst == null) {
-                Log.w(TAG, "无法执行滑动：辅助服务未启用或未处于运行状态")
-                return false
-            }
-            val path = Path()
-            path.moveTo(startX, startY)
-            path.lineTo(endX, endY)
-            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke)
-            return inst.dispatchGesture(builder.build(), null, null)
-        }
-
-        /**
-         * 模拟双击 (优化版：单次分发两个连续 Stroke)
-         */
-        fun performDoubleTap(x: Float, y: Float): Boolean {
-            val inst = instance ?: return false
-            val path = Path().apply { moveTo(x, y) }
-            
-            // 第一下：从 0ms 开始，持续 40ms
-            val stroke1 = GestureDescription.StrokeDescription(path, 0, 40)
-            // 第二下：从 100ms 开始（留出 60ms 间隔），持续 40ms
-            val stroke2 = GestureDescription.StrokeDescription(path, 100, 40)
-            
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke1)
-            builder.addStroke(stroke2)
-            
-            return inst.dispatchGesture(builder.build(), null, null)
-        }
-
-        /**
-         * 模拟长按
-         */
-        fun performLongPress(x: Float, y: Float): Boolean {
-            val inst = instance ?: return false
-            val path = Path()
-            path.moveTo(x, y)
-            val stroke = GestureDescription.StrokeDescription(path, 0, 800)
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke)
-            return inst.dispatchGesture(builder.build(), null, null)
-        }
-
-        /**
-         * 执行系统级的返回键操作
-         */
-        fun performBack(): Boolean {
-            return instance?.performGlobalAction(GLOBAL_ACTION_BACK) ?: false
-        }
-
-        /**
-         * 执行系统级的回到桌面操作
-         */
-        fun performHome(): Boolean {
-            return instance?.performGlobalAction(GLOBAL_ACTION_HOME) ?: false
-        }
-
     }
 
-    /**
-     * 当辅助服务被系统成功开启并连接时回调，此时缓存当前服务实例以供全局快捷调用
-     */
+    private var lastX = 0f
+    private var lastY = 0f
+    private var currentStroke: GestureDescription.StrokeDescription? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
-        _isRunning.value = true // 更新状态
-        
-        // 绑定命令处理器
-        if (repository is com.example.data.repository.RemoteControlRepositoryImpl) {
-            (repository as com.example.data.repository.RemoteControlRepositoryImpl).setCommandHandler { command ->
-                when (command) {
-                    is RemoteCommand.Tap -> performTap(command.x, command.y)
-                    is RemoteCommand.DoubleTap -> performDoubleTap(command.x, command.y)
-                    is RemoteCommand.LongPress -> performLongPress(command.x, command.y)
-                    is RemoteCommand.Down -> handleTouchDown(command.x, command.y)
-                    is RemoteCommand.Move -> handleTouchMove(command.x, command.y)
-                    is RemoteCommand.Up -> handleTouchUp()
-                    is RemoteCommand.Back -> performBack()
-                    is RemoteCommand.Home -> performHome()
-                    else -> {}
-                }
+        repository.setAccessibilityRunning(true)
+
+        serviceScope.launch {
+            repository.clientCommands.collect { command ->
+                executeCommand(command)
             }
         }
-        
-        Log.i(TAG, "远程触控辅助服务成功激活并绑定")
+
+        Log.i(TAG, "远程触控辅助服务已激活")
     }
 
-    /**
-     * 服务销毁时回调，安全清空静态实例引用，避免内存泄漏
-     */
+    private fun executeCommand(command: RemoteCommand) {
+        val (screenWidth, screenHeight) = repository.getServerScreenSize()
+        if (screenWidth <= 0 || screenHeight <= 0) return
+
+        when (command) {
+            is RemoteCommand.Tap -> performTap(command.x * screenWidth, command.y * screenHeight)
+            is RemoteCommand.DoubleTap -> performDoubleTap(command.x * screenWidth, command.y * screenHeight)
+            is RemoteCommand.LongPress -> performLongPress(command.x * screenWidth, command.y * screenHeight)
+            is RemoteCommand.Down -> handleTouchDown(command.x * screenWidth, command.y * screenHeight)
+            is RemoteCommand.Move -> handleTouchMove(command.x * screenWidth, command.y * screenHeight)
+            is RemoteCommand.Up -> handleTouchUp()
+            is RemoteCommand.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
+            is RemoteCommand.Home -> performGlobalAction(GLOBAL_ACTION_HOME)
+            is RemoteCommand.Recent -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+        }
+    }
+
+    private fun handleTouchDown(x: Float, y: Float) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val path = Path().apply { moveTo(x, y) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, 10, true)
+            currentStroke = stroke
+            dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        }
+        lastX = x
+        lastY = y
+    }
+
+    private fun handleTouchMove(x: Float, y: Float) {
+        val prev = currentStroke
+        if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val path = Path().apply {
+                moveTo(lastX, lastY)
+                lineTo(x, y)
+            }
+            val next = prev.continueStroke(path, 0, 10, true)
+            currentStroke = next
+            dispatchGesture(GestureDescription.Builder().addStroke(next).build(), null, null)
+        }
+        lastX = x
+        lastY = y
+    }
+
+    private fun handleTouchUp() {
+        val prev = currentStroke
+        if (prev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val path = Path().apply { moveTo(lastX, lastY) }
+            val last = prev.continueStroke(path, 0, 10, false)
+            dispatchGesture(GestureDescription.Builder().addStroke(last).build(), null, null)
+        }
+        currentStroke = null
+    }
+
+    private fun performTap(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 30)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    private fun performDoubleTap(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val stroke1 = GestureDescription.StrokeDescription(path, 0, 40)
+        val stroke2 = GestureDescription.StrokeDescription(path, 100, 40)
+        return dispatchGesture(
+            GestureDescription.Builder().addStroke(stroke1).addStroke(stroke2).build(), null, null
+        )
+    }
+
+    private fun performLongPress(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 800)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val packageName = event.packageName?.toString() ?: "unknown"
+            repository.addServerLog("窗口切换: $packageName", LogType.INFO)
+        }
+    }
+
+    override fun onInterrupt() {}
+
     override fun onDestroy() {
         super.onDestroy()
-        if (instance == this) {
-            instance = null
-            _isRunning.value = false // 更新状态
-            
-            // 清除命令处理器
-            if (repository is com.example.data.repository.RemoteControlRepositoryImpl) {
-                (repository as com.example.data.repository.RemoteControlRepositoryImpl).setCommandHandler { }
-            }
-        }
-        Log.i(TAG, "远程触控辅助服务已销毁")
-    }
-
-    /**
-     * 监听系统无障碍事件的回调方法
-     * @param event 系统拦截并产生的分发事件
-     */
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        when (event?.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                Log.d("onAccessibilityEvent", "TYPE_WINDOW_CONTENT_CHANGED")
-            }
-
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-
-                // 只在窗口变化时记录，避免过于频繁
-                val packageName = event.packageName?.toString() ?: "unknown"
-                repository.addServerLog(
-                    "窗口切换: $packageName",
-                    LogType.INFO
-                )
-            }
-
-            else -> {}
-        }
-    }
-
-    /**
-     * 服务被系统中断或意外挂起时的回调
-     */
-    override fun onInterrupt() {
-        // 无需处理中断后的收尾逻辑
+        repository.setAccessibilityRunning(false)
+        serviceScope.cancel()
     }
 }

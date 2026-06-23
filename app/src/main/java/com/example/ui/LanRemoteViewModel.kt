@@ -1,11 +1,7 @@
 package com.example.ui
 
-import android.content.Context
-import android.content.Intent
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.ScreenCaptureService
 import com.example.data.model.*
 import com.example.data.repository.RemoteControlRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,14 +14,10 @@ class LanRemoteViewModel @Inject constructor(
     private val repository: RemoteControlRepository
 ) : ViewModel() {
 
-    companion object {
-        const val TAG = "LanRemoteViewModel"
-    }
-
     // 被控端(服务端)运行状态
-    val isServerRunning: StateFlow<Boolean> = repository.serverState
-        .map { it is ServerState.Running }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isServerRunning: StateFlow<Boolean> =
+        repository.serverState.map { it is ServerState.Running }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // 本机在局域网中的物理 IPv4 地址
     val serverIp: StateFlow<String> = repository.serverIp
@@ -52,9 +44,9 @@ class LanRemoteViewModel @Inject constructor(
     val hasFrameReceived: StateFlow<Boolean> = repository.hasFrameReceived
 
     // 未合并累积的视频流数据切片热流，提供给悬浮窗底层的 MediaCodec 硬件解码器直接读取
-    val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> = repository.videoFrames
-        .map { Triple(it.data, it.flags, it.pts) }
-        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000))
+    val encodedFrameFlow: SharedFlow<Triple<ByteArray, Int, Long>> =
+        repository.videoFrames.map { Triple(it.data, it.flags, it.pts) }
+            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000))
 
 
     // 同步镜像的物理参考大屏宽度
@@ -66,9 +58,18 @@ class LanRemoteViewModel @Inject constructor(
     // 悬浮窗的缩放比例状态流
     val floatingScaleMultiplier: StateFlow<Float> = repository.floatingScaleMultiplier
 
+    // 订阅全局悬浮窗运行状态
+    val isFloatingWindowRunning: StateFlow<Boolean> = repository.isFloatingWindowRunning
+
     /**
      * 更新全局悬浮窗的缩放比例
      */
+    // 订阅全局后台服务的实时运行状态
+    val isAccessibilityRunning: StateFlow<Boolean> = repository.isAccessibilityRunning
+
+    // 订阅全局屏幕捕捉前台服务的活动状态
+    val isScreenCaptureRunning: StateFlow<Boolean> = repository.isScreenCaptureRunning
+
     fun updateFloatingScaleMultiplier(value: Float) {
         repository.updateFloatingScaleMultiplier(value)
     }
@@ -104,17 +105,9 @@ class LanRemoteViewModel @Inject constructor(
         }
     }
 
-    fun stopServer(context: Context?) {
+    fun stopServer() {
         viewModelScope.launch {
             repository.stopServer()
-            // 重置并销毁前台屏幕像素录制采集服务
-            context?.let { ctx ->
-                try {
-                    ctx.stopService(Intent(ctx, ScreenCaptureService::class.java))
-                } catch (e: Exception) {
-                    Log.e(TAG, "注销视频采集服务异常: ${e.message}")
-                }
-            }
         }
     }
 

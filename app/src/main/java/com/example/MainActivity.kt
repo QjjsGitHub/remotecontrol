@@ -67,7 +67,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -120,8 +119,7 @@ class MainActivity : ComponentActivity() {
                 startService(serviceIntent)
             }
             viewModel.addServerLog(
-                "媒体投影屏幕捕获授权成功，已启动后台捕获服务",
-                LogType.SUCCESS
+                "媒体投影屏幕捕获授权成功，已启动后台捕获服务", LogType.SUCCESS
             )
         } else {
             Toast.makeText(this, "录屏请求被拒绝，无法启动屏幕共控分享", Toast.LENGTH_SHORT).show()
@@ -147,8 +145,7 @@ class MainActivity : ComponentActivity() {
                     onRequestScreenShare = {
                         val installIntent = mediaProjectionManager.createScreenCaptureIntent()
                         recordResultLauncher.launch(installIntent)
-                    }
-                )
+                    })
             }
         }
     }
@@ -181,8 +178,8 @@ fun SimplifiedDashboardScreen(
     val mirroredHeight by viewModel.mirroredHeight.collectAsState()
 
     // 订阅全局后台服务的实时运行状态，实现事件驱动的 UI 自动刷新
-    val isFloatingWindowRunning by FloatingWindowService.isRunning.collectAsStateWithLifecycle()
-    val isAccessibilityRunning by RemoteAccessibilityService.isRunning.collectAsStateWithLifecycle()
+    val isFloatingWindowRunning by viewModel.isFloatingWindowRunning.collectAsState()
+    val isAccessibilityRunning by viewModel.isAccessibilityRunning.collectAsState()
 
     var activeLogTab by remember { mutableIntStateOf(0) } // 0 = 服务端日志, 1 = 客户端日志
 
@@ -191,7 +188,7 @@ fun SimplifiedDashboardScreen(
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.Connected) {
             if (Settings.canDrawOverlays(context)) {
-                if (!FloatingWindowService.isRunning.value) {
+                if (!isFloatingWindowRunning) {
                     val serviceIntent = Intent(context, FloatingWindowService::class.java)
                     context.startService(serviceIntent)
                 }
@@ -209,7 +206,7 @@ fun SimplifiedDashboardScreen(
             }
         } else {
             // 通道意外中断，或人为主动切断连接后，彻底释放并注销大屏悬浮窗
-            if (FloatingWindowService.isRunning.value) {
+            if (isFloatingWindowRunning) {
                 val serviceIntent = Intent(context, FloatingWindowService::class.java)
                 context.stopService(serviceIntent)
             }
@@ -220,7 +217,7 @@ fun SimplifiedDashboardScreen(
     val scaleMultiplier by viewModel.floatingScaleMultiplier.collectAsState()
 
     // 订阅全局屏幕捕捉前台服务的活动状态 (实时更新指示灯与开关)
-    val isScreenCaptureRunning by ScreenCaptureService.isServiceRunning.collectAsState()
+    val isScreenCaptureRunning by viewModel.isScreenCaptureRunning.collectAsState()
 
     Scaffold(
         modifier = Modifier
@@ -254,10 +251,8 @@ fun SimplifiedDashboardScreen(
                                     MaterialTheme.colorScheme.primary,
                                     MaterialTheme.colorScheme.secondary
                                 )
-                            ),
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
+                            ), CircleShape
+                        ), contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Share,
@@ -318,8 +313,7 @@ fun SimplifiedDashboardScreen(
                                 containerColor = if (isServerRunning) Color(0xFF4CAF50).copy(
                                     alpha = 0.2f
                                 ) else Color.Red.copy(alpha = 0.15f)
-                            ),
-                            shape = RoundedCornerShape(8.dp)
+                            ), shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
                                 text = if (isServerRunning) "服务激活中" else "未开启",
@@ -342,7 +336,13 @@ fun SimplifiedDashboardScreen(
                     Button(
                         onClick = {
                             if (isServerRunning) {
-                                viewModel.stopServer(context)
+                                viewModel.stopServer()
+                                // View 层负责处理与 Context 相关的副作用
+                                context.stopService(
+                                    Intent(
+                                        context, ScreenCaptureService::class.java
+                                    )
+                                )
                             } else {
                                 viewModel.startServer()
                                 if (!isScreenCaptureRunning) {
@@ -390,8 +390,7 @@ fun SimplifiedDashboardScreen(
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                                 shape = RoundedCornerShape(6.dp),
                                 border = BorderStroke(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant
+                                    1.dp, MaterialTheme.colorScheme.outlineVariant
                                 )
                             ) {
                                 Text(
@@ -400,8 +399,7 @@ fun SimplifiedDashboardScreen(
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 14.sp,
                                     modifier = Modifier.padding(
-                                        horizontal = 10.dp,
-                                        vertical = 4.dp
+                                        horizontal = 10.dp, vertical = 4.dp
                                     )
                                 )
                             }
@@ -440,30 +438,23 @@ fun SimplifiedDashboardScreen(
                                     if (isScreenCaptureRunning) {
                                         context.stopService(
                                             Intent(
-                                                context,
-                                                ScreenCaptureService::class.java
+                                                context, ScreenCaptureService::class.java
                                             )
                                         )
                                         viewModel.addServerLog(
-                                            "主动停止了屏幕捕捉进程",
-                                            LogType.WARNING
+                                            "主动停止了屏幕捕捉进程", LogType.WARNING
                                         )
                                     } else {
                                         onRequestScreenShare()
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(
+                                }, colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isScreenCaptureRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
-                                ),
-                                contentPadding = PaddingValues(
-                                    horizontal = 12.dp,
-                                    vertical = 4.dp
-                                ),
-                                modifier = Modifier.height(36.dp)
+                                ), contentPadding = PaddingValues(
+                                    horizontal = 12.dp, vertical = 4.dp
+                                ), modifier = Modifier.height(36.dp)
                             ) {
                                 Text(
-                                    if (isScreenCaptureRunning) "停投" else "启投",
-                                    fontSize = 12.sp
+                                    if (isScreenCaptureRunning) "停投" else "启投", fontSize = 12.sp
                                 )
                             }
                         }
@@ -481,8 +472,7 @@ fun SimplifiedDashboardScreen(
                                     .background(
                                         if (isAccessibilityRunning) Color(
                                             0xFF4CAF50
-                                        ) else Color.Red,
-                                        CircleShape
+                                        ) else Color.Red, CircleShape
                                     )
                             )
                             Spacer(modifier = Modifier.width(8.dp))
@@ -521,8 +511,7 @@ fun SimplifiedDashboardScreen(
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                                 contentPadding = PaddingValues(
-                                    horizontal = 12.dp,
-                                    vertical = 4.dp
+                                    horizontal = 12.dp, vertical = 4.dp
                                 ),
                                 modifier = Modifier.height(36.dp)
                             ) {
@@ -572,8 +561,7 @@ fun SimplifiedDashboardScreen(
                                     ConnectionState.Connecting -> Color(0xFFFFA500).copy(alpha = 0.15f)
                                     ConnectionState.Disconnected -> Color.Red.copy(alpha = 0.15f)
                                 }
-                            ),
-                            shape = RoundedCornerShape(8.dp)
+                            ), shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
                                 text = when (connectionState) {
@@ -618,11 +606,9 @@ fun SimplifiedDashboardScreen(
                                     onClick = { viewModel.selectServer(serverInfo) },
                                     label = {
                                         Text(
-                                            serverInfo.ip,
-                                            fontFamily = FontFamily.Monospace
+                                            serverInfo.ip, fontFamily = FontFamily.Monospace
                                         )
-                                    }
-                                )
+                                    })
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -810,8 +796,7 @@ fun SimplifiedDashboardScreen(
                         Row(
                             modifier = Modifier
                                 .background(
-                                    MaterialTheme.colorScheme.surface,
-                                    RoundedCornerShape(10.dp)
+                                    MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp)
                                 )
                                 .padding(2.dp)
                         ) {
@@ -824,8 +809,7 @@ fun SimplifiedDashboardScreen(
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (activeLogTab == 0) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
                                     .clickable { activeLogTab = 0 }
-                                    .padding(horizontal = 14.dp, vertical = 6.dp)
-                            )
+                                    .padding(horizontal = 14.dp, vertical = 6.dp))
                             Text(
                                 text = "客户端事件流",
                                 fontSize = 11.sp,
@@ -835,16 +819,14 @@ fun SimplifiedDashboardScreen(
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (activeLogTab == 1) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                                     .clickable { activeLogTab = 1 }
-                                    .padding(horizontal = 14.dp, vertical = 6.dp)
-                            )
+                                    .padding(horizontal = 14.dp, vertical = 6.dp))
                         }
 
                         // 一键清空当前选定面板缓存日志 (Clear logs)
                         TextButton(
                             onClick = {
                                 if (activeLogTab == 0) viewModel.clearServerLogs() else viewModel.clearControllerLogs()
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) {
                             Text("清空日志", fontSize = 11.sp)
                         }

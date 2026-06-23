@@ -47,6 +47,11 @@ interface RemoteControlRepository {
     suspend fun broadcastScreenSize(size: ScreenSize)
 
     /**
+     * 接收到的客户端指令流 (供被控端执行)
+     */
+    val clientCommands: Flow<RemoteCommand>
+
+    /**
      * 处理从客户端接收到的命令
      * @param command 远程控制命令
      */
@@ -69,7 +74,31 @@ interface RemoteControlRepository {
     /** 镜像屏幕高度 */
     val mirroredHeight: StateFlow<Int>
 
-    /** 是否接收到过视频帧 */
+    /** 悬浮窗服务是否正在运行 */
+    val isFloatingWindowRunning: StateFlow<Boolean>
+
+    /**
+     * 更新悬浮窗服务运行状态
+     */
+    fun setFloatingWindowRunning(running: Boolean)
+
+    /** 无障碍服务是否正在运行 */
+    val isAccessibilityRunning: StateFlow<Boolean>
+
+    /**
+     * 更新无障碍服务运行状态
+     */
+    fun setAccessibilityRunning(running: Boolean)
+
+    /** 屏幕捕获是否正在运行 */
+    val isScreenCaptureRunning: StateFlow<Boolean>
+
+    /**
+     * 更新屏幕捕获运行状态
+     */
+    fun setScreenCaptureRunning(running: Boolean)
+
+    /** 是否已接收到视频帧 */
     val hasFrameReceived: StateFlow<Boolean>
 
     /** 悬浮窗缩放比例 */

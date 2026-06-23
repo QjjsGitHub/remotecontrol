@@ -79,7 +79,5 @@ interface FloatingWindowCallback {
 /**
  * 统一的服务回调接口
  */
-interface UnifiedServiceCallback :
-    ScreenCaptureCallback,
-    AccessibilityCallback,
+interface UnifiedServiceCallback : ScreenCaptureCallback, AccessibilityCallback,
     FloatingWindowCallback

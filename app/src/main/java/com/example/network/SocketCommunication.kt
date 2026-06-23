@@ -93,7 +93,6 @@ class SocketServer(
                     val inputStream = java.io.DataInputStream(socket.getInputStream())
                     while (isRunning) {
                         val length = inputStream.readInt()
-                        Log.d("手势", "length：$length")
                         if (length in 1..NetworkConstants.MAX_PACKET_SIZE) {
                             val payload = ByteArray(length)
                             inputStream.readFully(payload)
@@ -202,8 +201,7 @@ class SocketClient(
             try {
                 val targetSocket = Socket()
                 targetSocket.connect(
-                    InetSocketAddress(serverIp, port),
-                    NetworkConstants.CONNECT_TIMEOUT_MS.toInt()
+                    InetSocketAddress(serverIp, port), NetworkConstants.CONNECT_TIMEOUT_MS.toInt()
                 )
                 socket = targetSocket
                 outputStream = java.io.DataOutputStream(targetSocket.getOutputStream())
@@ -318,10 +316,7 @@ class UdpBroadcaster(
                 }
                 val contents = "${NetworkConstants.UDP_BROADCAST_PREFIX}$serverIp".toByteArray()
                 val packet = DatagramPacket(
-                    contents,
-                    contents.size,
-                    InetAddress.getByName("255.255.255.255"),
-                    port
+                    contents, contents.size, InetAddress.getByName("255.255.255.255"), port
                 )
                 while (isRunning) {
                     socket?.send(packet)

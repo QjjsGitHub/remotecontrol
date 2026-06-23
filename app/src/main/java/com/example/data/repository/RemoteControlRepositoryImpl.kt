@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.util.Log
 import com.example.data.model.ClientInfo
 import com.example.data.model.ConnectionState
 import com.example.data.model.LogEntry
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.w3c.dom.TypeInfo
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -59,8 +61,10 @@ class RemoteControlRepositoryImpl(
     private val _serverHeight = MutableStateFlow(DEFAULT_HEIGHT)
 
     // ========== 客户端状态 ==========
-    private val _clientConnectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    override val clientConnectionState: StateFlow<ConnectionState> = _clientConnectionState.asStateFlow()
+    private val _clientConnectionState =
+        MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
+    override val clientConnectionState: StateFlow<ConnectionState> =
+        _clientConnectionState.asStateFlow()
 
     private val _discoveredServers = MutableStateFlow<Set<ServerInfo>>(emptySet())
     override val discoveredServers: StateFlow<Set<ServerInfo>> = _discoveredServers.asStateFlow()
@@ -73,6 +77,16 @@ class RemoteControlRepositoryImpl(
 
     private val _mirroredHeight = MutableStateFlow(DEFAULT_HEIGHT)
     override val mirroredHeight: StateFlow<Int> = _mirroredHeight.asStateFlow()
+
+    private val _isFloatingWindowRunning = MutableStateFlow(false)
+    override val isFloatingWindowRunning: StateFlow<Boolean> =
+        _isFloatingWindowRunning.asStateFlow()
+
+    private val _isAccessibilityRunning = MutableStateFlow(false)
+    override val isAccessibilityRunning: StateFlow<Boolean> = _isAccessibilityRunning.asStateFlow()
+
+    private val _isScreenCaptureRunning = MutableStateFlow(false)
+    override val isScreenCaptureRunning: StateFlow<Boolean> = _isScreenCaptureRunning.asStateFlow()
 
     private val _hasFrameReceived = MutableStateFlow(false)
     override val hasFrameReceived: StateFlow<Boolean> = _hasFrameReceived.asStateFlow()
@@ -96,12 +110,8 @@ class RemoteControlRepositoryImpl(
     private var udpBroadcaster: UdpBroadcaster? = null
     private var udpListener: UdpListener? = null
 
-    // 回调接口，供 Service 设置
-    private var commandHandler: ((RemoteCommand) -> Unit)? = null
-
-    fun setCommandHandler(handler: (RemoteCommand) -> Unit) {
-        this.commandHandler = handler
-    }
+    private val _clientCommands = MutableSharedFlow<RemoteCommand>(extraBufferCapacity = 64)
+    override val clientCommands: Flow<RemoteCommand> = _clientCommands.asSharedFlow()
 
     // ========== 服务器端操作实现 ==========
 
@@ -115,42 +125,45 @@ class RemoteControlRepositoryImpl(
             _serverIp.value = ip
             addServerLog("正在启动服务器...", LogType.INFO)
 
-            socketServer = SocketServer(
-                port = NetworkConstants.TCP_PORT,
-                onClientConnected = { clientIp ->
-                    _connectedClients.value = (_connectedClients.value + ClientInfo(clientIp)).distinctBy { it.ip }
+            socketServer =
+                SocketServer(port = NetworkConstants.TCP_PORT, onClientConnected = { clientIp ->
+                    _connectedClients.value =
+                        (_connectedClients.value + ClientInfo(clientIp)).distinctBy { it.ip }
                     addServerLog("客户端已连接: $clientIp", LogType.SUCCESS)
-                    
+
                     // 广播当前屏幕尺寸给新连接的客户端
                     scope.launch {
-                        broadcastScreenSize(ScreenSize(_serverWidth.value, _serverHeight.value, if (_serverWidth.value > _serverHeight.value) 1 else 0))
+                        broadcastScreenSize(
+                            ScreenSize(
+                                _serverWidth.value,
+                                _serverHeight.value,
+                                if (_serverWidth.value > _serverHeight.value) 1 else 0
+                            )
+                        )
                     }
-                },
-                onClientDisconnected = { clientIp ->
+                }, onClientDisconnected = { clientIp ->
                     _connectedClients.value = _connectedClients.value.filter { it.ip != clientIp }
                     addServerLog("客户端已断开: $clientIp", LogType.WARNING)
-                },
-                onCommandReceived = { clientIp, commandStr ->
+                }, onCommandReceived = { clientIp, commandStr ->
                     val command = RemoteCommand.fromProtocolString(commandStr)
                     if (command != null) {
                         scope.launch {
                             handleClientCommand(command)
                         }
                     } else {
-                        addServerLog("收到来自 [$clientIp] 的未知指令: $commandStr", LogType.WARNING)
+                        addServerLog(
+                            "收到来自 [$clientIp] 的未知指令: $commandStr", LogType.WARNING
+                        )
                     }
-                },
-                onError = { error ->
+                }, onError = { error ->
                     addServerLog(error, LogType.ERROR)
-                }
-            )
+                })
             socketServer?.start()
 
             udpBroadcaster = UdpBroadcaster(
                 serverIp = ip,
                 port = NetworkConstants.UDP_PORT,
-                onError = { error -> addServerLog(error, LogType.ERROR) }
-            )
+                onError = { error -> addServerLog(error, LogType.ERROR) })
             udpBroadcaster?.start()
 
             _serverState.value = ServerState.Running(ip, NetworkConstants.TCP_PORT)
@@ -202,9 +215,7 @@ class RemoteControlRepositoryImpl(
     }
 
     override suspend fun handleClientCommand(command: RemoteCommand) {
-        withContext(Dispatchers.Main) {
-            commandHandler?.invoke(command)
-        }
+        _clientCommands.emit(command)
     }
 
     // ========== 客户端操作实现 ==========
@@ -212,18 +223,15 @@ class RemoteControlRepositoryImpl(
     override suspend fun startDiscovery() {
         _discoveredServers.value = emptySet()
         udpListener?.stop()
-        udpListener = UdpListener(
-            port = NetworkConstants.UDP_PORT,
-            onServersUpdated = { serverSet ->
+        udpListener =
+            UdpListener(port = NetworkConstants.UDP_PORT, onServersUpdated = { serverSet ->
                 val oldSet = _discoveredServers.value.map { it.ip }.toSet()
                 _discoveredServers.value = serverSet.map { ServerInfo(it) }.toSet()
 
                 (serverSet - oldSet).forEach { ip ->
                     addClientLog("发现局域网可用设备: $ip", LogType.SUCCESS)
                 }
-            },
-            onError = { error -> addClientLog(error, LogType.ERROR) }
-        )
+            }, onError = { error -> addClientLog(error, LogType.ERROR) })
         udpListener?.start()
         addClientLog("已开启局域网探针...", LogType.INFO)
     }
@@ -233,32 +241,32 @@ class RemoteControlRepositoryImpl(
         udpListener = null
     }
 
-    override suspend fun connectToServer(serverInfo: ServerInfo): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            disconnect()
-            addClientLog("正在连接到服务端: ${serverInfo.ip}...", LogType.INFO)
-            
-            socketClient = SocketClient(
-                serverIp = serverInfo.ip,
-                onStateChanged = { state ->
-                    _clientConnectionState.value = state
-                    
-                    if (state == ConnectionState.Connected) {
-                        addClientLog("已建立连接", LogType.SUCCESS)
-                    } else if (state == ConnectionState.Disconnected) {
-                        addClientLog("连接已断开", LogType.WARNING)
-                        _hasFrameReceived.value = false
-                    }
-                },
-                onMessageReceived = { handleClientData(it) },
-                onError = { error -> addClientLog(error, LogType.ERROR) }
-            )
-            socketClient?.connect()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+    override suspend fun connectToServer(serverInfo: ServerInfo): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                disconnect()
+                addClientLog("正在连接到服务端: ${serverInfo.ip}...", LogType.INFO)
+
+                socketClient = SocketClient(
+                    serverIp = serverInfo.ip,
+                    onStateChanged = { state ->
+                        _clientConnectionState.value = state
+
+                        if (state == ConnectionState.Connected) {
+                            addClientLog("已建立连接", LogType.SUCCESS)
+                        } else if (state == ConnectionState.Disconnected) {
+                            addClientLog("连接已断开", LogType.WARNING)
+                            _hasFrameReceived.value = false
+                        }
+                    },
+                    onMessageReceived = { handleClientData(it) },
+                    onError = { error -> addClientLog(error, LogType.ERROR) })
+                socketClient?.connect()
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
-    }
 
     override suspend fun disconnect(): Result<Unit> = withContext(Dispatchers.IO) {
         socketClient?.disconnect()
@@ -307,6 +315,18 @@ class RemoteControlRepositoryImpl(
 
     // ========== 配置操作实现 ==========
 
+    override fun setFloatingWindowRunning(running: Boolean) {
+        _isFloatingWindowRunning.value = running
+    }
+
+    override fun setAccessibilityRunning(running: Boolean) {
+        _isAccessibilityRunning.value = running
+    }
+
+    override fun setScreenCaptureRunning(running: Boolean) {
+        _isScreenCaptureRunning.value = running
+    }
+
     override fun setServerScreenSize(width: Int, height: Int) {
         _serverWidth.value = width
         _serverHeight.value = height
@@ -329,21 +349,27 @@ class RemoteControlRepositoryImpl(
                     val pts = buffer.long
                     val data = ByteArray(buffer.remaining())
                     buffer.get(data)
-                    
+
                     scope.launch {
                         _videoFrames.emit(VideoFrame(data, flags, pts))
                         _hasFrameReceived.value = true
                     }
                 }
+
                 NetworkConstants.TYPE_SIZE -> {
-                    val message = String(ByteArray(buffer.remaining()).apply { buffer.get(this) }, Charsets.UTF_8)
+                    val message = String(
+                        ByteArray(buffer.remaining()).apply { buffer.get(this) }, Charsets.UTF_8
+                    )
                     if (message.startsWith("SIZE:")) {
                         val sizes = message.substringAfter("SIZE:").split(",")
                         if (sizes.size >= 3) {
                             _mirroredWidth.value = sizes[0].toIntOrNull() ?: DEFAULT_WIDTH
                             _mirroredHeight.value = sizes[1].toIntOrNull() ?: DEFAULT_HEIGHT
                             val rot = if (sizes[2].toIntOrNull() == 1) "横屏" else "竖屏"
-                            addClientLog("同步远端分辨率: ${_mirroredWidth.value}x${_mirroredHeight.value} ($rot)", LogType.INFO)
+                            addClientLog(
+                                "同步远端分辨率: ${_mirroredWidth.value}x${_mirroredHeight.value} ($rot)",
+                                LogType.INFO
+                            )
                         }
                     }
                 }

@@ -10,7 +10,6 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -56,27 +55,32 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.NotificationCompat
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.data.model.ConnectionState
+import com.example.data.model.LogType
 import com.example.data.repository.RemoteControlRepository
+import com.example.ui.FloatingWindowViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -89,8 +93,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 后台安全全局悬浮窗控制服务 (FloatingWindowService)
- * 该服务允许在不处于前台 activity 的情况下，常驻在系统桌面之上显示 1/2 比例的受控画面，
- * 并支持实时的 TAP 与 SWIPE 反向遥控手势操作注入。
+ * 遵循严格的 MVVM 模式。Service 作为 View 的宿主，不直接处理业务逻辑，而是观察 ViewModel 发出的指令。
  */
 @AndroidEntryPoint
 class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
@@ -101,592 +104,355 @@ class FloatingWindowService : Service(), LifecycleOwner, ViewModelStoreOwner,
 
     companion object {
         const val TAG = "FloatingWindowService"
-
-        private val CHANNEL_ID: String = "FloatingWindowService"
-
-        /**
-         * 其他后台线程（如协程、网络监听器）能立即看到最新的运行状态。
-         */
-        // 核心：使用 StateFlow 管理状态
-        private val _isRunning = MutableStateFlow(false)
-        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
-
+        private const val CHANNEL_ID = "FloatingWindowService"
     }
 
-    // 后台生命周期控制器，用于供给 ComposeView 所需的生命周期环境
     private val lifecycleRegistry = LifecycleRegistry(this)
-
-    // 页面存储容器，用于托管和追踪 ViewModel 依赖
     private val store = ViewModelStore()
-
-    // 已保存状态的注册控制器，供给 Compose 组件树的底层架构环境
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
 
-    // 提供生命周期接口实现
     override val lifecycle: Lifecycle get() = lifecycleRegistry
-
-    // 提供 ViewModel 存储实现
     override val viewModelStore: ViewModelStore get() = store
-
-    // 提供状态存档恢复实现
     override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
 
-    // 系统窗口管理员，用于在桌面上层添加/更新/移除全局悬浮窗组件
     private var windowManager: WindowManager? = null
-
-    // 自定义的 Jetpack Compose 视图容器，可直接塞入悬浮窗中
     private var floatingView: ComposeView? = null
 
-    // 悬浮窗属于后台常驻无绑定服务，默认返回 null
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /**
-     * 服务初始化生命周期
-     */
     override fun onCreate() {
         super.onCreate()
-        _isRunning.value = true
-        Log.i(TAG, "FloatingWindowService onCreate")
+        repository.setFloatingWindowRunning(true)
 
-        // 激活生命周期状态
         savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
         createNotificationChannel()
-        // 启动前台通知（Android 14 强制要求）
-        val notification = createNotification() // 你需要实现一个简单的通知创建方法
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                9922,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            )
-        } else {
-            startForeground(9922, notification)
-        }
+        startForeground(9922, createNotification())
 
-
-        // 绑定窗口管理员并创建浮空视窗
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         setupFloatingWindow()
-
-        // 监听对端的连接存活状态 —— 一旦网络断开或宿主关闭，自动销毁悬浮窗服务确保系统纯净
-        lifecycleScope.launch {
-            repository.clientConnectionState.collectLatest { state ->
-                if (state == ConnectionState.Disconnected) {
-                    Log.i(TAG, "Connection lost, closing floating window")
-                    stopSelf()
-                }
-            }
-        }
     }
 
-    /**
-     * 建立并在系统服务下注册低功耗前台通知管道
-     */
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "屏幕共享后台服务",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "正在后台捕获并发送屏幕数据流"
-            }
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+                CHANNEL_ID, "屏幕共享后台服务", NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("远程悬浮窗已打开")
-            .setContentText("显示远程画面")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setOngoing(true)
-            .build()
+        return NotificationCompat.Builder(this, CHANNEL_ID).setContentTitle("远程悬浮窗已打开")
+            .setContentText("正在显示远程画面").setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true).build()
     }
 
-    /**
-     * 创建并装载全局系统级悬浮窗 (SYSTEM_ALERT_WINDOW)
-     */
     private fun setupFloatingWindow() {
-        val context = this
         val wm = windowManager ?: return
+        val dm = resources.displayMetrics
 
-        // 1. 在初始化阶段预先计算出正确地悬浮窗起始尺寸，避免 WRAP_CONTENT 导致的首次显示闪烁或 320dp 限制
-        val density = context.resources.displayMetrics.density
-        val config = context.resources.configuration
-        val screenWidthDp = config.screenWidthDp.toFloat()
-
-        // 获取当前已有的同步状态
+        // 1. 预设初始大小，避免 WRAP_CONTENT 导致的测量闪烁
         val initialScale = repository.floatingScaleMultiplier.value
-        val mirroredW = repository.mirroredWidth.value
-        val mirroredH = repository.mirroredHeight.value
+        val screenWidth = dm.widthPixels
 
-        // 依据纵横比计算初始像素宽高
-        val aspectRatio = if (mirroredW > 0) mirroredH.toFloat() / mirroredW.toFloat() else 16f / 9f
-        val initialWidthPx = (screenWidthDp * initialScale * density).toInt()
-        val initialHeightPx = ((screenWidthDp * initialScale * aspectRatio + 24) * density).toInt()
+        val mWidth = repository.mirroredWidth.value
+        val mHeight = repository.mirroredHeight.value
+        val aspectRatio = if (mWidth > 0) mHeight.toFloat() / mWidth.toFloat() else 1.77f
 
-        // 设定系统悬浮窗的核心布局配置参数
+        // 初始高度使用服务端发来的比例 + Header 高度(24dp)
+        val initialWidth = (screenWidth * initialScale).toInt()
+        val initialHeight = (initialWidth * aspectRatio).toInt() + (24 * dm.density).toInt()
+
         val params = WindowManager.LayoutParams(
-            initialWidthPx,
-            initialHeightPx,
-            // 兼容性适配：Android 8.0以上版本必须使用 TYPE_APPLICATION_OVERLAY 悬浮窗类型
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
-            // 设定无焦点属性 FLAG_NOT_FOCUSABLE，以及允许布局超出屏幕限制 (FLAG_LAYOUT_NO_LIMITS) 从而支持超大缩放
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            initialWidth,
+            initialHeight,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            // 设定悬浮窗在桌面上的起步初始化偏移坐标
             x = 150
             y = 350
         }
 
-        // 装载 Compose 环境并注入 ViewTree 关系
-        val composeView = ComposeView(context).apply {
-            setViewTreeLifecycleOwner(context)
-            setViewTreeViewModelStoreOwner(context)
-            setViewTreeSavedStateRegistryOwner(context)
+        val composeView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@FloatingWindowService)
+            setViewTreeViewModelStoreOwner(this@FloatingWindowService)
+            setViewTreeSavedStateRegistryOwner(this@FloatingWindowService)
         }
 
         composeView.setContent {
-            val hasFrameReceived by repository.hasFrameReceived.collectAsState()
-            val mirroredWidth by repository.mirroredWidth.collectAsState()
-            val mirroredHeight by repository.mirroredHeight.collectAsState()
+            val viewModel: FloatingWindowViewModel =
+                viewModel(factory = object : ViewModelProvider.Factory {
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                        return FloatingWindowViewModel(repository) as T
+                    }
+                })
 
-            // 1. 获取窗口信息（包含精确地像素尺寸）
-            val windowInfo = LocalWindowInfo.current
-            // 2. 获取当前的密度（用于像素转 DP）
-            val density = LocalDensity.current
-
-            // 3. 将像素宽度转换为精确的 DP 值
-            val clientScreenWidthDp = with(density) {
-                windowInfo.containerSize.width.toDp().value
-            }
-
-            // 订阅来自 Repository 的全局悬浮窗缩放比例
-            val scaleMultiplier by repository.floatingScaleMultiplier.collectAsState()
-
-            // 触摸锁定状态：为 true 时，支持双指手势缩放窗口；为 false 时，响应远程滑动/点击操作
-            var isTouchLocked by remember { mutableStateOf(false) }
-
-            // 依据远端画布分辨率自动计算宽高纵横比，实现完美的自适应缩放，且高度随宽度弹性拉伸
-            val aspectRatio =
-                if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
-            val windowWidthDp = clientScreenWidthDp * scaleMultiplier
-            val windowHeightDp = windowWidthDp * aspectRatio
-
-            // 判定是否处于紧凑模式（宽度过小时隐藏次要按钮）
-            val isCompact = windowWidthDp < 180
-
-            // 强制将 Compose 计算出的 DP 尺寸同步给系统 WindowManager 的 LayoutParams
-            LaunchedEffect(windowWidthDp, windowHeightDp) {
-                val density = context.resources.displayMetrics.density
-                val targetWidthPx = (windowWidthDp * density).toInt()
-                val targetHeightPx = ((windowHeightDp + 24) * density).toInt()
-
-                // 【优化】引入 2 像素阈值判断，减少由于浮点数微小变动导致的频繁系统调用
-                if (kotlin.math.abs(params.width - targetWidthPx) > 2 ||
-                    kotlin.math.abs(params.height - targetHeightPx) > 2
-                ) {
-                    params.width = targetWidthPx
-                    params.height = targetHeightPx
-                    try {
-                        wm.updateViewLayout(composeView, params)
-                    } catch (e: Exception) {
-                        repository.addClientLog(
-                            "更新悬浮窗尺寸失败: ${e.message}",
-                            com.example.data.model.LogType.WARNING
-                        )
+            // MVVM 核心：宿主观察 ViewModel 的事件流
+            LaunchedEffect(Unit) {
+                launch {
+                    viewModel.closeEvent.collect { stopSelf() }
+                }
+                launch {
+                    viewModel.connectionState.collectLatest { state ->
+                        if (state == ConnectionState.Disconnected) stopSelf()
                     }
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(16.dp))
-                    .border(2.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
-                    .background(Color.Black)
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-
-                    // 顶部操作手柄栏 (高24dp)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(24.dp)
-                            .background(Color(0xFF6200EE))
-                            .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    params.x += dragAmount.x.toInt()
-                                    params.y += dragAmount.y.toInt()
-                                    try {
-                                        wm.updateViewLayout(composeView, params)
-                                    } catch (e: Exception) {
-                                        repository.addClientLog(
-                                            "移动悬浮窗失败: ${e.message}",
-                                            com.example.data.model.LogType.WARNING
-                                        )
-                                    }
-                                }
-                            }
-                            .padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        // 1. 状态文字 (仅在非紧凑模式显示)
-                        if (!isCompact) {
-                            Text(
-                                text = if (isTouchLocked) "缩放中: ${(scaleMultiplier * 100).toInt()}%" else "控屏中:${(scaleMultiplier * 100).toInt()}%",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                textAlign = TextAlign.Center
-                            )
-
-                            // 2. 返回按钮 (仅在非紧凑模式显示)
-
-                            IconButton(
-                                onClick = { lifecycleScope.launch { repository.sendCommand("BACK") } },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        // 3. Home 按钮 (仅在非紧凑模式显示)
-                        IconButton(
-                            onClick = { lifecycleScope.launch { repository.sendCommand("HOME") } },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Home,
-                                contentDescription = "Home",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        // 4. 触摸锁定按钮 (必须显示)
-                        IconButton(
-                            onClick = { isTouchLocked = !isTouchLocked },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Lock",
-                                tint = if (isTouchLocked) Color(0xFFFF5252) else Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        // 5. 关闭按钮 (必须显示)
-                        IconButton(
-                            onClick = { stopSelf() },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-
-                    // 画面显示与控制面板区域
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (hasFrameReceived) {
-
-                            // 【优化】移除冗余 key，将重置逻辑收拢到 VideoSurfaceViewer 内部
-                            var localViewW by remember { mutableIntStateOf(1) }
-                            var localViewH by remember { mutableIntStateOf(1) }
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    // 监听双指手势缩放画面（仅在触摸锁定状态下生效）
-                                    .pointerInput(isTouchLocked) {
-                                        if (isTouchLocked) {
-                                            detectTransformGestures { _, _, zoom, _ ->
-                                                val newScale =
-                                                    (scaleMultiplier * zoom).coerceIn(
-                                                        0.2f,
-                                                        0.8f
-                                                    )
-                                                repository.updateFloatingScaleMultiplier(
-                                                    newScale
-                                                )
-                                            }
-                                        }
-                                    }
-                            )
-                            {
-                                VideoSurfaceViewer(
-                                    repository = repository,
-                                    onSurfaceCreatedPoke = {
-                                        // 【核心唤醒逻辑】组件挂载后延迟捅一下 WindowManager，确保 SurfaceView 被系统激活
-                                        try {
-                                            wm.updateViewLayout(composeView, params)
-                                        } catch (_: Exception) {
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .onSizeChanged { size ->
-                                            // 记录并缓存当前悬浮窗真实的物理显示宽高
-                                            localViewW = size.width
-                                            localViewH = size.height
-                                        }
-                                        // 监听手势 (全手势支持 + 60FPS 滑动节流)
-                                        .pointerInput(
-                                            localViewW,
-                                            localViewH,
-                                            isTouchLocked
-                                        ) {
-                                            if (isTouchLocked || localViewW <= 0 || localViewH <= 0) return@pointerInput
-
-                                            val viewW = localViewW.toFloat()
-                                            val viewH = localViewH.toFloat()
-
-                                            // 用于 60FPS 节流的变量 (1000ms / 60 ≈ 16ms)
-                                            var lastMoveTime = 0L
-                                            val frameInterval = 16L
-
-                                            kotlinx.coroutines.coroutineScope {
-                                                // 1. 处理 Tap, DoubleTap, LongPress, Press
-                                                launch {
-                                                    detectTapGestures(
-                                                        onTap = { offset ->
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("TAP:${offset.x / viewW},${offset.y / viewH}")
-                                                            }
-                                                        },
-                                                        onDoubleTap = { offset ->
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("DOUBLE_TAP:${offset.x / viewW},${offset.y / viewH}")
-                                                            }
-                                                        },
-                                                        onLongPress = { offset ->
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("LONG_PRESS:${offset.x / viewW},${offset.y / viewH}")
-                                                            }
-                                                        }
-                                                    )
-                                                }
-
-                                                // 2. 处理 Drag (滑动) 并进行 60FPS 节流
-                                                launch {
-                                                    detectDragGestures(
-                                                        onDragStart = { offset ->
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("DOWN:${offset.x / viewW},${offset.y / viewH}")
-                                                            }
-                                                        },
-                                                        onDragEnd = {
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("UP:0,0")
-                                                            }
-                                                        },
-                                                        onDragCancel = {
-                                                            lifecycleScope.launch {
-                                                                repository.sendCommand("UP:0,0")
-                                                            }
-                                                        },
-                                                        onDrag = { change, _ ->
-                                                            change.consume()
-                                                            val currentTime =
-                                                                System.currentTimeMillis()
-                                                            // 60FPS 节流逻辑：如果距离上次发送不足 16ms，则跳过本次发送
-                                                            if (currentTime - lastMoveTime >= frameInterval) {
-                                                                val rx = change.position.x / viewW
-                                                                val ry = change.position.y / viewH
-                                                                lifecycleScope.launch {
-                                                                    repository.sendCommand("MOVE:$rx,$ry")
-                                                                }
-                                                                lastMoveTime = currentTime
-                                                            }
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                )
-
-                                // 锁定状态下的半透明遮罩与手势提示 HUD
-                                if (isTouchLocked) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.45f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Icon(
-                                                imageVector = Icons.Default.Lock,
-                                                contentDescription = "Pinch to zoom mode active",
-                                                tint = Color(0xFFFF5252),
-                                                modifier = Modifier.size(24.dp)
-                                            )
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text(
-                                                text = "触摸已锁定\n双指手势可缩放大小\n当前比例: ${(scaleMultiplier * 100).toInt()}%",
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                textAlign = TextAlign.Center,
-                                                lineHeight = 14.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "等待远端投屏...",
-                                    color = Color.Gray,
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                    }
+            FloatingWindowContent(viewModel = viewModel, onMove = { dx, dy ->
+                params.x += dx.toInt()
+                params.y += dy.toInt()
+                wm.updateViewLayout(composeView, params)
+            }, onResize = { widthPx, heightPx ->
+                if (kotlin.math.abs(params.width - widthPx) > 2 || kotlin.math.abs(params.height - heightPx) > 2) {
+                    params.width = widthPx
+                    params.height = heightPx
+                    wm.updateViewLayout(composeView, params)
                 }
-            }
+            }, onUpdateLayout = { wm.updateViewLayout(composeView, params) })
         }
 
-        try {
-            // 向屏幕添加全局 Overlay 悬浮视图层
-            wm.addView(composeView, params)
-            floatingView = composeView
-            // 【细节改进】addView 成功后，将生命周期提升至 RESUMED，确保 Compose 动画和 API 正常工作
-            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add floating window view: ${e.message}")
-            stopSelf()
-        }
+        wm.addView(composeView, params)
+        floatingView = composeView
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
     }
 
-    /**
-     * 服务被销毁生命周期
-     */
     override fun onDestroy() {
-        _isRunning.value = false
-        Log.i(TAG, "FloatingWindowService onDestroy")
-        // 【细节改进】在移除视图前，将状态退回至 STARTED
+        repository.setFloatingWindowRunning(false)
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
-        floatingView?.let { view ->
-            try {
-                // 彻底释放全局 Overlay 视图，杜绝悬浮窗内存泄漏
-                windowManager?.removeView(view)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error removing dynamic window view: ${e.message}")
-            }
-        }
+        floatingView?.let { windowManager?.removeView(it) }
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        store.clear()
         super.onDestroy()
     }
 }
 
-/**
- * 视频帧表面视图呈现组件 (VideoSurfaceViewer)
- * 通过封装底层 SurfaceView 并初始化 Android 独占的 MediaCodec H.264 硬件解码器，
- * 将接收自服务端的 H.264 编码切片帧流高速还原绘制到手机悬浮窗上。
- *
- * @param viewModel 被订阅的共控核心业务 ViewModel 实例 [LanRemoteViewModel]
- * @param onSurfaceCreatedPoke 唤醒回调，用于捅一下 WindowManager 激活 SurfaceView
- * @param modifier 界面样式修饰 Modifier
- */
+@Composable
+fun FloatingWindowContent(
+    viewModel: FloatingWindowViewModel,
+    onMove: (Float, Float) -> Unit,
+    onResize: (Int, Int) -> Unit,
+    onUpdateLayout: () -> Unit
+) {
+    val hasFrameReceived by viewModel.hasFrameReceived.collectAsState()
+    val mirroredWidth by viewModel.mirroredWidth.collectAsState()
+    val mirroredHeight by viewModel.mirroredHeight.collectAsState()
+    val scaleMultiplier by viewModel.scaleMultiplier.collectAsState()
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current // 使用配置信息作为屏幕基准
+
+    var isTouchLocked by remember { mutableStateOf(false) }
+
+    val aspectRatio =
+        if (mirroredWidth > 0) mirroredHeight.toFloat() / mirroredWidth.toFloat() else 16f / 9f
+    // 2. 纠正基准：使用屏幕总宽度作为缩放系数的基数
+    val clientScreenWidthDp = configuration.screenWidthDp.toFloat()
+    val windowWidthDp = clientScreenWidthDp * scaleMultiplier
+    val windowHeightDp = windowWidthDp * aspectRatio
+    val isCompact = windowWidthDp < 180
+
+    LaunchedEffect(windowWidthDp, windowHeightDp) {
+        val d = density.density
+        onResize((windowWidthDp * d).toInt(), ((windowHeightDp + 24) * d).toInt())
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(16.dp))
+            .border(2.dp, Color(0xFF6200EE), RoundedCornerShape(16.dp))
+            .background(Color.Black)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+                    .background(Color(0xFF6200EE))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onMove(dragAmount.x, dragAmount.y)
+                        }
+                    }
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                if (!isCompact) {
+                    Text(
+                        text = if (isTouchLocked) "缩放: ${(scaleMultiplier * 100).toInt()}%" else "控屏: ${(scaleMultiplier * 100).toInt()}%",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick = { viewModel.sendCommand("BACK") }, modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { viewModel.sendCommand("HOME") }, modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Home,
+                        "Home",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = { isTouchLocked = !isTouchLocked }, modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Lock,
+                        "Lock",
+                        tint = if (isTouchLocked) Color.Red else Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = { viewModel.requestClose() }, modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        "Close",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            // Video Area
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (hasFrameReceived) {
+                    var localViewW by remember { mutableIntStateOf(1) }
+                    var localViewH by remember { mutableIntStateOf(1) }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(isTouchLocked) {
+                                if (isTouchLocked) {
+                                    detectTransformGestures { _, _, zoom, _ ->
+                                        viewModel.updateScale(
+                                            zoom
+                                        )
+                                    }
+                                }
+                            }) {
+                        VideoSurfaceViewer(
+                            viewModel = viewModel,
+                            onSurfaceCreatedPoke = onUpdateLayout,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onSizeChanged { localViewW = it.width; localViewH = it.height }
+                                .pointerInput(localViewW, localViewH, isTouchLocked) {
+                                    if (isTouchLocked || localViewW <= 0 || localViewH <= 0) return@pointerInput
+                                    val viewW = localViewW.toFloat()
+                                    val viewH = localViewH.toFloat()
+                                    var lastMoveTime = 0L
+
+                                    kotlinx.coroutines.coroutineScope {
+                                        launch {
+                                            detectTapGestures(
+                                                onTap = { viewModel.sendCommand("TAP:${it.x / viewW},${it.y / viewH}") },
+                                                onDoubleTap = { viewModel.sendCommand("DOUBLE_TAP:${it.x / viewW},${it.y / viewH}") },
+                                                onLongPress = { viewModel.sendCommand("LONG_PRESS:${it.x / viewW},${it.y / viewH}") })
+                                        }
+                                        launch {
+                                            detectDragGestures(
+                                                onDragStart = { viewModel.sendCommand("DOWN:${it.x / viewW},${it.y / viewH}") },
+                                                onDragEnd = { viewModel.sendCommand("UP") },
+                                                onDragCancel = { viewModel.sendCommand("UP") },
+                                                onDrag = { change, _ ->
+                                                    change.consume()
+                                                    val now = System.currentTimeMillis()
+                                                    if (now - lastMoveTime >= 16L) {
+                                                        viewModel.sendCommand("MOVE:${change.position.x / viewW},${change.position.y / viewH}")
+                                                        lastMoveTime = now
+                                                    }
+                                                })
+                                        }
+                                    }
+                                })
+                        if (isTouchLocked) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(0.45f)),
+                                Alignment.Center
+                            ) {
+                                Text(
+                                    "触摸锁定\n双指缩放\n比例: ${(scaleMultiplier * 100).toInt()}%",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text("等待远端投屏...", color = Color.Gray, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun VideoSurfaceViewer(
-    repository: RemoteControlRepository,
+    viewModel: FloatingWindowViewModel,
     onSurfaceCreatedPoke: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val videoWidth by repository.mirroredWidth.collectAsState()
-    val videoHeight by repository.mirroredHeight.collectAsState()
-    val connectionState by repository.clientConnectionState.collectAsState()
+    val videoWidth by viewModel.mirroredWidth.collectAsState()
+    val videoHeight by viewModel.mirroredHeight.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
 
-    // 【核心重构】合并所有敏感 Key（分辨率+连接状态）。任何一个变化都会重启解码器和唤醒逻辑。
     androidx.compose.runtime.key(videoWidth, videoHeight, connectionState) {
-        val tag = FloatingWindowService.TAG
-        Log.d(
-            tag,
-            "VideoSurfaceViewer: Key Block Re-entered (W=$videoWidth, H=$videoHeight, State=$connectionState)"
-        )
-
-        // 使用 decoderToken 配合 decoder 确保 LaunchedEffect 能精准感知重建
-        var decoderToken by remember {
-            Log.d(tag, "VideoSurfaceViewer: State Reset (New Decoder Token)")
-            mutableIntStateOf(0)
-        }
+        var decoderToken by remember { mutableIntStateOf(0) }
         var decoder by remember { mutableStateOf<MediaCodec?>(null) }
 
-        // 当解码环境（Key）发生变化时，延迟执行唤醒逻辑
         LaunchedEffect(Unit) {
-            Log.d(tag, "VideoSurfaceViewer: LaunchedEffect(Unit) - Poking WindowManager")
             delay(200.milliseconds)
             onSurfaceCreatedPoke()
         }
 
-        LaunchedEffect(repository, decoderToken) {
-            Log.d(
-                tag,
-                "VideoSurfaceViewer: LaunchedEffect(Decoder) - Starting Frame Flow (Token=$decoderToken)"
-            )
+        LaunchedEffect(decoderToken) {
             val codec = decoder ?: return@LaunchedEffect
-            repository.videoFrames.collect { frame ->
-                val bytes = frame.data
-                val flags = frame.flags
-                val pts = frame.pts
+            viewModel.videoFrames.collect { frame ->
                 try {
                     val inputIndex = codec.dequeueInputBuffer(10000)
                     if (inputIndex >= 0) {
-                        codec.getInputBuffer(inputIndex)?.let { inputBuffer ->
-                            inputBuffer.clear()
-                            inputBuffer.put(bytes)
-                            codec.queueInputBuffer(inputIndex, 0, bytes.size, pts, flags)
+                        codec.getInputBuffer(inputIndex)?.apply {
+                            clear()
+                            put(frame.data)
+                            codec.queueInputBuffer(
+                                inputIndex, 0, frame.data.size, frame.pts, frame.flags
+                            )
                         }
                     }
-
-                    val bufferInfo = MediaCodec.BufferInfo()
-                    var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                    val info = MediaCodec.BufferInfo()
+                    var outputIndex = codec.dequeueOutputBuffer(info, 0)
                     while (outputIndex >= 0) {
                         codec.releaseOutputBuffer(outputIndex, true)
-                        outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                        outputIndex = codec.dequeueOutputBuffer(info, 0)
                     }
                 } catch (e: Exception) {
-                    repository.addClientLog(
-                        "解码推流失败: ${e.message}",
-                        com.example.data.model.LogType.WARNING
-                    )
+                    viewModel.addLog("解码失败: ${e.message}")
                 }
             }
         }
@@ -700,44 +466,28 @@ fun VideoSurfaceViewer(
                                 val codec =
                                     MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
                                 val format = MediaFormat.createVideoFormat(
-                                    MediaFormat.MIMETYPE_VIDEO_AVC,
-                                    videoWidth,
-                                    videoHeight
+                                    MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight
                                 )
                                 codec.configure(format, holder.surface, null, 0)
                                 codec.start()
-
                                 decoder = codec
-                                decoderToken++ // 强制重启 LaunchedEffect
+                                decoderToken++
                             } catch (e: Exception) {
-                                repository.addClientLog(
-                                    "构建解码器失败: ${e.message}",
-                                    com.example.data.model.LogType.WARNING
-                                )
+                                viewModel.addLog("构建解码器失败: ${e.message}")
                             }
                         }
 
-                        override fun surfaceChanged(
-                            holder: SurfaceHolder,
-                            format: Int,
-                            w: Int,
-                            h: Int
-                        ) {
-                        }
-
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            val activeCodec = decoder
-                            decoder = null
+                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) {}
+                        override fun surfaceDestroyed(h: SurfaceHolder) {
+                            val c = decoder; decoder = null
                             try {
-                                activeCodec?.stop()
-                                activeCodec?.release()
+                                c?.stop(); c?.release()
                             } catch (_: Exception) {
                             }
                         }
                     })
                 }
-            },
-            modifier = modifier
+            }, modifier = modifier
         )
     }
 }

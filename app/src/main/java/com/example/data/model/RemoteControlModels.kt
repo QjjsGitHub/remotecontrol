@@ -17,8 +17,7 @@ sealed class ConnectionState {
  */
 @Serializable
 data class ServerInfo(
-    val ip: String,
-    val port: Int = 9292
+    val ip: String, val port: Int = 9292
 )
 
 /**
@@ -26,17 +25,14 @@ data class ServerInfo(
  */
 @Serializable
 data class ClientInfo(
-    val ip: String,
-    val connectedAt: Long = System.currentTimeMillis()
+    val ip: String, val connectedAt: Long = System.currentTimeMillis()
 )
 
 /**
  * 视频帧数据
  */
 data class VideoFrame(
-    val data: ByteArray,
-    val flags: Int,
-    val pts: Long
+    val data: ByteArray, val flags: Int, val pts: Long
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -68,9 +64,7 @@ data class VideoFrame(
  */
 @Serializable
 data class ScreenSize(
-    val width: Int,
-    val height: Int,
-    val rotation: Int // 0=竖屏, 1=横屏
+    val width: Int, val height: Int, val rotation: Int // 0=竖屏, 1=横屏
 ) {
     val isLandscape: Boolean
         get() = rotation == 1
@@ -91,10 +85,7 @@ sealed class ServerState {
  * 日志类型
  */
 enum class LogType {
-    INFO,
-    SUCCESS,
-    WARNING,
-    ERROR
+    INFO, SUCCESS, WARNING, ERROR
 }
 
 /**
@@ -141,22 +132,27 @@ sealed class RemoteCommand {
                     val parts = str.substringAfter("TAP:").split(",")
                     if (parts.size == 2) Tap(parts[0].toFloat(), parts[1].toFloat()) else null
                 }
+
                 str.startsWith("DOUBLE_TAP:") -> {
                     val parts = str.substringAfter("DOUBLE_TAP:").split(",")
                     if (parts.size == 2) DoubleTap(parts[0].toFloat(), parts[1].toFloat()) else null
                 }
+
                 str.startsWith("LONG_PRESS:") -> {
                     val parts = str.substringAfter("LONG_PRESS:").split(",")
                     if (parts.size == 2) LongPress(parts[0].toFloat(), parts[1].toFloat()) else null
                 }
+
                 str.startsWith("DOWN:") -> {
                     val parts = str.substringAfter("DOWN:").split(",")
                     if (parts.size == 2) Down(parts[0].toFloat(), parts[1].toFloat()) else null
                 }
+
                 str.startsWith("MOVE:") -> {
                     val parts = str.substringAfter("MOVE:").split(",")
                     if (parts.size == 2) Move(parts[0].toFloat(), parts[1].toFloat()) else null
                 }
+
                 str == "UP" -> Up
                 str == "BACK" -> Back
                 str == "HOME" -> Home
