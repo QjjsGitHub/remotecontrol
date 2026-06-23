@@ -1,6 +1,7 @@
 package com.example.network
 
 import android.util.Log
+import com.example.data.model.ConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,20 +20,6 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
-
-/**
- * 远程连接的网络状态枚举
- */
-enum class ConnectionState {
-    /** 未连接状态 */
-    Disconnected,
-
-    /** 正在尝试连接中 */
-    Connecting,
-
-    /** 已成功建立连接 */
-    Connected
-}
 
 /**
  * 网络通信常量
@@ -71,7 +58,7 @@ class SocketServer(
     private val onCommandReceived: (String, String) -> Unit,
     private val onError: (String) -> Unit = {}
 ) {
-    private val TAG = "SocketServer"
+    private val tag = "SocketServer"
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -155,7 +142,7 @@ class SocketServer(
         scope.launch {
             try {
                 serverSocket = ServerSocket(port).apply { reuseAddress = true }
-                Log.i(TAG, "服务端已启动，监听端口: $port")
+                Log.i(tag, "服务端已启动，监听端口: $port")
                 while (isRunning) {
                     val socket = serverSocket?.accept() ?: break
                     val clientIp = socket.inetAddress.hostAddress ?: "未知IP"
@@ -163,7 +150,7 @@ class SocketServer(
                     activeClients[clientIp] = handler
                     launch(Dispatchers.Main) { onClientConnected(clientIp) }
                     handler.start()
-                    Log.d(TAG, "新客户端连接: $clientIp")
+                    Log.d(tag, "新客户端连接: $clientIp")
                 }
             } catch (e: Exception) {
                 if (isRunning) {
@@ -186,7 +173,7 @@ class SocketServer(
         activeClients.values.forEach { it.disconnect() }
         activeClients.clear()
         scope.coroutineContext.cancelChildren()
-        Log.i(TAG, "服务端已停止")
+        Log.i(tag, "服务端已停止")
     }
 }
 
@@ -197,7 +184,7 @@ class SocketClient(
     private val onMessageReceived: (ByteArray) -> Unit,
     private val onError: (String) -> Unit = {}
 ) {
-    private val TAG = "SocketClient"
+    private val tag = "SocketClient"
     private var socket: Socket? = null
     private var outputStream: java.io.DataOutputStream? = null
     private var isRunning = false
@@ -221,7 +208,7 @@ class SocketClient(
                 socket = targetSocket
                 outputStream = java.io.DataOutputStream(targetSocket.getOutputStream())
 
-                // 【关键】启动专门的写协程，保证同一时间只有一个协程在操作 OutputStream
+                // 【关键】启动专门地写协程，保证同一时间只有一个协程在操作 OutputStream
                 launch(Dispatchers.IO) {
                     try {
                         for (command in commandChannel) {
@@ -239,7 +226,7 @@ class SocketClient(
                 }
 
                 withContext(Dispatchers.Main) { onStateChanged(ConnectionState.Connected) }
-                Log.i(TAG, "已成功连接到服务端: $serverIp:$port")
+                Log.i(tag, "已成功连接到服务端: $serverIp:$port")
 
                 val inputStream = java.io.DataInputStream(targetSocket.getInputStream())
                 while (isRunning) {
@@ -376,7 +363,7 @@ class UdpListener(
     private val onServersUpdated: (Set<String>) -> Unit,
     private val onError: (String) -> Unit = {}
 ) {
-    private val TAG = "UdpListener"
+    private val tag = "UdpListener"
     private var socket: DatagramSocket? = null
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -440,7 +427,7 @@ class UdpListener(
                     val entry = iterator.next()
                     // 如果超过 3 次广播周期 (约 6-7 秒) 没收到包，认为已下线
                     if (now - entry.value > NetworkConstants.BROADCAST_INTERVAL_MS * 3 + 1000) {
-                        Log.i(TAG, "服务端 IP 已过期移除: ${entry.key}")
+                        Log.i(tag, "服务端 IP 已过期移除: ${entry.key}")
                         iterator.remove()
                         hasRemoved = true
                     }

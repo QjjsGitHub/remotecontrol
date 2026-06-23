@@ -22,16 +22,30 @@ import android.view.Display
 import android.view.Surface
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import com.example.ui.LanRemoteViewModel
+import com.example.data.model.LogType
+import com.example.data.model.ScreenSize
+import com.example.data.repository.RemoteControlRepository
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * 屏幕捕获与画面广播的前台服务 (ScreenCaptureService)
  * 启动系统投屏机制，获取实时屏幕数据并进行格式压缩，提供给共控端显示并进行反向控制
  */
+@AndroidEntryPoint
 class ScreenCaptureService : Service() {
+
+    @Inject
+    lateinit var repository: RemoteControlRepository
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
         private const val TAG = "ScreenCaptureService"
@@ -105,11 +119,11 @@ class ScreenCaptureService : Service() {
                     "检测到屏幕旋转且尺寸改变: ${currentWidth}x${currentHeight}"
                 )
 
-                // 通知 ViewModel 更新宽高并广播给客户端
-                LanRemoteViewModel.instance?.onScreenSizeDetermined(
-                    currentWidth,
-                    currentHeight
-                )
+                // 更新记录的宽高
+                repository.setServerScreenSize(currentWidth, currentHeight)
+                serviceScope.launch {
+                    repository.broadcastScreenSize(ScreenSize(currentWidth, currentHeight, if (currentWidth > currentHeight) 1 else 0))
+                }
 
                 // 现在这里只会在真正旋转完成时执行一次
                 restartVirtualDisplay(currentWidth, currentHeight, metrics.densityDpi)
@@ -180,9 +194,9 @@ class ScreenCaptureService : Service() {
                 start()
             }
         } catch (e: Exception) {
-            LanRemoteViewModel.instance?.addServerLog(
+            repository.addServerLog(
                 "重建编码器失败: ${e.message}",
-                com.example.ui.LogType.WARNING
+                LogType.WARNING
             )
             return
         }
@@ -195,18 +209,18 @@ class ScreenCaptureService : Service() {
                 surface = codecSurface
             }
         } catch (e: Exception) {
-            LanRemoteViewModel.instance?.addServerLog(
+            repository.addServerLog(
                 "调整虚拟显示失败: ${e.message}",
-                com.example.ui.LogType.WARNING
+                LogType.WARNING
             )
             return
         }
 
         isEncoding = true
         startEncodingLoop()
-        LanRemoteViewModel.instance?.addServerLog(
+        repository.addServerLog(
             "屏幕自适应完成: ${captureWidth}x${captureHeight}",
-            com.example.ui.LogType.SUCCESS
+            LogType.SUCCESS
         )
     }
 
@@ -260,9 +274,9 @@ class ScreenCaptureService : Service() {
         // 验证系统的屏幕投射许可结果是否已经被正常授予
         if (resultCode != android.app.Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Result code is not OK or data intent is null. Stopping service...")
-            LanRemoteViewModel.instance?.addServerLog(
+            repository.addServerLog(
                 "投屏启动失败：未获得用户授权",
-                com.example.ui.LogType.WARNING
+                LogType.WARNING
             )
             stopSelf()
             return START_NOT_STICKY
@@ -271,17 +285,17 @@ class ScreenCaptureService : Service() {
         try {
             mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
             if (mediaProjection == null) {
-                LanRemoteViewModel.instance?.addServerLog(
+                repository.addServerLog(
                     "投屏授权失败: 实例为空",
-                    com.example.ui.LogType.WARNING
+                    LogType.WARNING
                 )
                 stopSelf()
                 return START_NOT_STICKY
             }
         } catch (e: Exception) {
-            LanRemoteViewModel.instance?.addServerLog(
+            repository.addServerLog(
                 "创建投屏引擎异常: ${e.message}",
-                com.example.ui.LogType.WARNING
+                LogType.WARNING
             )
             stopSelf()
             return START_NOT_STICKY
@@ -303,8 +317,11 @@ class ScreenCaptureService : Service() {
         val height = metrics.heightPixels
         val density = metrics.densityDpi
 
-        // 反馈给 ViewModel 系统端确切的物理宽度与高度
-        LanRemoteViewModel.instance?.onScreenSizeDetermined(width, height)
+        // 反馈给 Repository 系统端确切的物理宽度与高度
+        repository.setServerScreenSize(width, height)
+        serviceScope.launch {
+            repository.broadcastScreenSize(ScreenSize(width, height, if (width > height) 1 else 0))
+        }
 
         // 为了极大节约移动端局域网的网络传输带宽开销，将采集宽高整体降级为正常宽高的 0.35 倍，且对齐到 16 字节
         val (captureWidth, captureHeight) = calculateCaptureSize(width, height)
@@ -329,9 +346,9 @@ class ScreenCaptureService : Service() {
                 codecSurface = createInputSurface()
             }
         } catch (e: Exception) {
-            LanRemoteViewModel.instance?.addServerLog(
+            repository.addServerLog(
                 "初始化视频编码器失败: ${e.message}",
-                com.example.ui.LogType.WARNING
+                LogType.WARNING
             )
             stopSelf()
             return
@@ -362,9 +379,9 @@ class ScreenCaptureService : Service() {
         isEncoding = true
         startEncodingLoop()
 
-        LanRemoteViewModel.instance?.addServerLog(
+        repository.addServerLog(
             "投屏引擎并硬件视频编码开启成功",
-            com.example.ui.LogType.SUCCESS
+            LogType.SUCCESS
         )
     }
 
@@ -374,7 +391,6 @@ class ScreenCaptureService : Service() {
     private fun startEncodingLoop() {
         codecThread = Thread {
             val bufferInfo = MediaCodec.BufferInfo()
-            val vm = LanRemoteViewModel.instance
             while (isEncoding && !Thread.currentThread().isInterrupted) {
                 try {
                     val codec = mediaCodec ?: break
@@ -393,24 +409,33 @@ class ScreenCaptureService : Service() {
                                 cachedConfigFrame = configData
                                 Log.d(TAG, "已捕获并缓存最新编码器配置 (SPS/PPS)")
                             } else if (flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) {
-                                // 2. 如果是关键帧 (I-Frame)，检查是否有缓存的配置
+                                // 2. 如果它是一个关键帧 (I-Frame)，检查是否有缓存的配置
                                 cachedConfigFrame?.let { config ->
-                                    vm?.onEncodedFrameCaptured(
-                                        config,
-                                        MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
-                                        pts
-                                    )
+                                    serviceScope.launch {
+                                        repository.broadcastVideoFrame(
+                                            config,
+                                            MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
+                                            pts
+                                        )
+                                    }
                                 }
                             }
                             // --- 周期性补发逻辑核心结束 ---
 
-                            // 核心优化：直接把硬件 ByteBuffer 丢给 VM 处理，由 VM 进行唯一的分配和拷贝
-                            vm?.onEncodedFrameCaptured(outputBuffer, bufferInfo)
+                            // 直接把硬件 ByteBuffer 丢给 Repository 处理
+                            val size = bufferInfo.size
+                            val packet = ByteArray(size)
+                            outputBuffer.position(bufferInfo.offset)
+                            outputBuffer.limit(bufferInfo.offset + size)
+                            outputBuffer.get(packet)
+                            
+                            serviceScope.launch {
+                                repository.broadcastVideoFrame(packet, flags, pts)
+                            }
                         }
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     }
                 } catch (e: Exception) {
-                    // 如果是严重错误，可以重启编码器
                     if (isEncoding) {
                         Log.d(TAG, "线程中断: ${e.message}")
                     } else {

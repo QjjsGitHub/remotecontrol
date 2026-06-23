@@ -7,18 +7,25 @@ import android.graphics.Path
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import com.example.ui.LanRemoteViewModel
-import com.example.ui.LogType
+import com.example.data.model.LogType
+import com.example.data.model.RemoteCommand
+import com.example.data.repository.RemoteControlRepository
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import javax.inject.Inject
 
 /**
  * 远程触控辅助输入服务 (RemoteAccessibilityService)
  * 继承自系统的 AccessibilityService，用于在被控制端(服务端)模拟全局的触摸、滑动等手势操作。
  */
 @SuppressLint("AccessibilityPolicy")
+@AndroidEntryPoint
 class RemoteAccessibilityService : AccessibilityService() {
+
+    @Inject
+    lateinit var repository: RemoteControlRepository
 
     companion object {
         private const val TAG = "RemoteAccessibilityService"
@@ -226,6 +233,24 @@ class RemoteAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         _isRunning.value = true // 更新状态
+        
+        // 绑定命令处理器
+        if (repository is com.example.data.repository.RemoteControlRepositoryImpl) {
+            (repository as com.example.data.repository.RemoteControlRepositoryImpl).setCommandHandler { command ->
+                when (command) {
+                    is RemoteCommand.Tap -> performTap(command.x, command.y)
+                    is RemoteCommand.DoubleTap -> performDoubleTap(command.x, command.y)
+                    is RemoteCommand.LongPress -> performLongPress(command.x, command.y)
+                    is RemoteCommand.Down -> handleTouchDown(command.x, command.y)
+                    is RemoteCommand.Move -> handleTouchMove(command.x, command.y)
+                    is RemoteCommand.Up -> handleTouchUp()
+                    is RemoteCommand.Back -> performBack()
+                    is RemoteCommand.Home -> performHome()
+                    else -> {}
+                }
+            }
+        }
+        
         Log.i(TAG, "远程触控辅助服务成功激活并绑定")
     }
 
@@ -237,6 +262,11 @@ class RemoteAccessibilityService : AccessibilityService() {
         if (instance == this) {
             instance = null
             _isRunning.value = false // 更新状态
+            
+            // 清除命令处理器
+            if (repository is com.example.data.repository.RemoteControlRepositoryImpl) {
+                (repository as com.example.data.repository.RemoteControlRepositoryImpl).setCommandHandler { }
+            }
         }
         Log.i(TAG, "远程触控辅助服务已销毁")
     }
@@ -255,7 +285,7 @@ class RemoteAccessibilityService : AccessibilityService() {
 
                 // 只在窗口变化时记录，避免过于频繁
                 val packageName = event.packageName?.toString() ?: "unknown"
-                LanRemoteViewModel.instance?.addServerLog(
+                repository.addServerLog(
                     "窗口切换: $packageName",
                     LogType.INFO
                 )
