@@ -43,29 +43,6 @@ class RemoteAccessibilityService : AccessibilityService() {
         private var lastY = 0f
         private var isDragging = false
 
-        /*fun handleTouchDown(x: Float, y: Float) {
-            lastX = x
-            lastY = y
-            isDragging = true
-            // 发送一个极短的滑动或者点击来启动触摸
-            //performTap(x, y)
-        }
-
-        fun handleTouchMove(x: Float, y: Float) {
-            if (!isDragging) return
-            // 使用极短时间 (10ms) 的滑动来模拟实时拖动
-            performSwipe(lastX, lastY, x, y, 200)
-            lastX = x
-            lastY = y
-        }
-
-        fun handleTouchUp() {
-            isDragging = false
-        }*/
-
-
-        // RemoteAccessibilityService.kt
-
         private var currentStroke: GestureDescription.StrokeDescription? = null
 
         // 当收到 DOWN 指令时
