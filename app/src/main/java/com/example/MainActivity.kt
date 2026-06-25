@@ -139,6 +139,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+
+        intent.getStringExtra("CRASH_MSG")?.let {
+            Toast.makeText(
+                this,
+                "检测到异常，已重新启动: $it",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
         setContent {
             MyApplicationTheme {
                 SimplifiedDashboardScreen(
